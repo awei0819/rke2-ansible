@@ -1,0 +1,33 @@
+# 本机IP
+local_address: 192.168.80.31
+
+# master主机列表:ssh端口
+master:
+  - 192.168.80.31:22
+  - 192.168.80.32:22
+  - 192.168.80.33:22
+
+# worker主机列表:ssh端口，没有可以注释或删除
+worker:
+  - 192.168.80.34:22
+
+# 全局数据目录
+data_dir: /data/rke2
+
+# cni calico[暂只支持calico]
+cni: calico
+
+# 有不同网卡可适配多个，逗号分隔，只适用calico
+calico_net: ens*
+
+# ingress部署开关
+master_ingress: true
+worker_ingress: false
+
+
+# 会在rke2/agent/etc/containerd下生成镜像仓库配置,避免x509
+mirrors:
+  endpoint: https://registry.test.com
+  auth:
+    username: admin
+    password: 12345

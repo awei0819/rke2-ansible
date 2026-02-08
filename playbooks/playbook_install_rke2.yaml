@@ -1,0 +1,745 @@
+---
+# RKE2集群完整部署Playbook
+- name: 全局变量初始化 - 加载集群配置并共享
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  vars_files:
+    - ../cluster.yaml
+  tasks:
+    - name: 绑定全局变量到localhost（所有节点可通过hostvars访问）
+      set_fact:
+        # 原始local_address本身无端口
+        global_local_address: "{{ local_address }}"
+        # 处理master列表：去掉每个元素的":端口"部分，只保留IP
+        global_master_list: "{{ master | map('regex_replace', ':.*', '') | list }}"
+        # 处理worker列表：去掉每个元素的":端口"部分，只保留IP（兼容空列表）
+        global_worker_list: "{{ worker | default([]) | map('regex_replace', ':.*', '') | list }}"
+        # 其他变量保持不变
+        global_data_dir: "{{ data_dir }}"
+        global_cni: "{{ cni }}"
+        global_master_ingress: "{{ master_ingress }}"
+        global_worker_ingress: "{{ worker_ingress }}"
+        global_mirrors: "{{ mirrors }}"
+        # 核心修改：用dirname过滤器提取data_dir中rke2前面的路径
+        base_data_dir: "{{ data_dir | dirname }}"
+    
+# ========== 前置验证（只在localhost执行） ==========
+    - name: 验证cluster.yaml配置
+      fail:
+        msg: "集群配置中必须包含master节点！当前master列表：{{ global_master_list | default('未定义') }}"
+      when: global_master_list is not defined or global_master_list|length == 0
+
+    - name: 验证local_address配置
+      fail:
+        msg: "cluster.yaml中必须配置local_address！当前值：{{ global_local_address | default('未定义') }}"
+      when: global_local_address is not defined or global_local_address == ""
+    
+    - name: 验证local_address在master列表中
+      fail:
+        msg: |
+          错误：local_address ({{ global_local_address }}) 不在master节点列表中！
+          master节点列表: {{ global_master_list }}
+      when: global_local_address not in global_master_list
+    
+    - name: 显示验证通过信息
+      debug:
+        msg: |
+          =========================================
+          cluster.yaml 配置验证通过：
+          - local_address: {{ global_local_address }} ✓ (在master列表中)
+          - master节点数: {{ global_master_list | length }} 个
+          - worker节点数: {{ global_worker_list | length }} 个
+          - 数据目录: {{ global_data_dir }}
+          - CNI: {{ global_cni }}
+          =========================================
+
+
+# ==================== 步骤0: 同步全局变量到所有节点 ====================
+- name: 步骤0 - 同步全局变量到所有节点
+  hosts: rke2
+  gather_facts: yes
+  tasks:
+    - name: 从localhost同步全局变量
+      set_fact:
+        global_local_address: "{{ hostvars['localhost']['global_local_address'] }}"
+        global_master_list: "{{ hostvars['localhost']['global_master_list'] }}"
+        global_worker_list: "{{ hostvars['localhost']['global_worker_list'] }}"
+        global_data_dir: "{{ hostvars['localhost']['global_data_dir'] }}"
+        global_cni: "{{ hostvars['localhost']['global_cni'] }}"
+        global_master_ingress: "{{ hostvars['localhost']['global_master_ingress'] }}"
+        global_worker_ingress: "{{ hostvars['localhost']['global_worker_ingress'] }}"
+        base_data_dir: "{{ hostvars['localhost']['base_data_dir'] }}"
+    
+    - name: 验证变量已同步
+      debug:
+        msg: |
+          节点 {{ inventory_hostname }} 变量同步完成:
+          - global_data_dir: {{ global_data_dir }}
+          - base_data_dir: {{ base_data_dir }}
+          - local_address: {{ global_local_address }}
+
+
+# ==================== 步骤1: 准备目录和解压安装包（复用全局变量） ====================
+- name: 步骤1 - 准备目录和解压安装包
+  hosts: rke2
+  vars:
+    # 从全局变量读取，避免重复定义
+    rke2_config_dir: /etc/rancher/rke2
+    rke2_data_dir: "{{ global_data_dir }}"
+    rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
+    rke2_images_dir: "{{ rke2_data_dir }}/agent/images"
+    artifacts_tarball: rke2-artifacts.tgz
+  
+  tasks:
+    - name: 创建RKE2目录
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      loop:
+        - "{{ rke2_config_dir }}"
+        - "{{ rke2_data_dir }}"
+        - "{{ rke2_artifacts_dir }}"
+        - "{{ rke2_images_dir }}"
+  
+    - name: 检查artifacts是否已存在
+      stat:
+        path: "{{ rke2_artifacts_dir }}/install.sh"
+      register: artifact_check
+  
+    - name: 显示当前状态
+      debug:
+        msg: "节点 {{ inventory_hostname }} - Artifacts存在: {{ artifact_check.stat.exists }}"
+  
+    - name: 解压artifacts到 {{ base_data_dir }}
+      unarchive:
+        src: "../{{ artifacts_tarball }}"
+        dest: "{{ base_data_dir }}"
+        remote_src: no
+        creates: "{{ rke2_artifacts_dir }}/install.sh"
+      when: not artifact_check.stat.exists
+  
+    - name: 复制rke2镜像文件到images目录
+      copy:
+        src: "{{ rke2_artifacts_dir }}/rke2-images.linux-amd64.tar.zst"
+        dest: "{{ rke2_images_dir }}/"
+        remote_src: yes
+        mode: "0644"
+        owner: root
+        group: root
+        backup: yes
+    
+    - name: 检查calico_images目录是否存在
+      stat:
+        path: "{{ rke2_artifacts_dir }}/calico_images"
+      register: calico_dir_check
+      
+  
+    - name: 复制整个calico_images目录到images目录
+      copy:
+        src: "{{ rke2_artifacts_dir }}/calico_images"
+        dest: "{{ rke2_images_dir }}/"
+        remote_src: yes
+  
+    - name: 验证结果
+      shell: |
+        echo "=== 节点: {{ inventory_hostname }} ==="
+        echo "基础数据目录: {{ base_data_dir }}"
+        echo "RKE2 artifacts目录: {{ rke2_artifacts_dir }}"
+        echo "RKE2 images目录: {{ rke2_images_dir }}"
+        echo "Artifacts目录中的文件:"
+        ls -lh "{{ rke2_artifacts_dir }}/" 2>/dev/null | head -10 || echo "未找到文件"
+        echo "Images目录中的文件:"
+        ls -lh "{{ rke2_images_dir }}/" 2>/dev/null | head -10 || echo "未找到文件"
+        echo "Calico images目录中的文件:"
+        if [ -d "{{ rke2_artifacts_dir }}/calico_images" ]; then
+          ls -lh "{{ rke2_artifacts_dir }}/calico_images/" 2>/dev/null | head -10 || echo "Calico目录为空"
+        else
+          echo "Calico目录不存在"
+        fi
+      register: verify_result
+      changed_when: false
+  
+    - name: 显示验证结果
+      debug:
+        msg: "{{ verify_result.stdout_lines }}"
+
+# ==================== 步骤2: 为local_address节点准备证书（修复变量问题） ====================
+- name: 步骤2 - 准备并生成RKE2预置证书（仅local_address节点）
+  hosts: rke2-masters
+  gather_facts: yes  # 改为yes，以便使用ansible_facts
+  vars:
+    rke2_data_dir: "{{ hostvars['localhost']['global_data_dir'] }}"  # 直接引用localhost的全局变量
+    
+  tasks:
+    - name: 检查当前节点是否是 local_address
+      set_fact:
+        is_local_address: "{{ ansible_facts['default_ipv4']['address'] == hostvars['localhost']['global_local_address'] or inventory_hostname == hostvars['localhost']['global_local_address'] }}"
+    
+    - name: 如果不是local_address则跳过整个play
+      meta: end_host
+      when: not is_local_address
+    
+    # 合并Task：创建目录 + 生成证书（仅local_address节点执行）
+    - name: 为local_address节点创建证书目录并生成证书
+      block:
+        # 子任务1：创建证书目录
+        - name: 创建RKE2证书目录
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0700'
+            recurse: yes
+          loop:
+            - "{{ rke2_data_dir }}/server/tls"
+            - "{{ rke2_data_dir }}/server/tls/etcd"
+        
+        # 子任务2：显示当前工作目录和变量值
+        - name: 显示调试信息
+          debug:
+            msg: |
+              证书生成调试信息:
+              - 当前节点: {{ inventory_hostname }}
+              - rke2_data_dir: {{ rke2_data_dir }}
+              - 脚本路径: {{ playbook_dir }}/../create_tls.sh
+              - 工作目录: {{ ansible_env.PWD | default('未定义') }}
+        
+        # 子任务3：执行脚本生成证书
+        - name: 执行脚本创建证书文件
+          ansible.builtin.shell: |
+            cd "{{ playbook_dir }}/.."  # 切换到脚本所在目录
+            bash create_tls.sh
+          args:
+            chdir: "{{ playbook_dir }}/.."  # 确保在正确目录执行
+          register: script_result
+        
+        - name: 显示脚本执行结果
+          ansible.builtin.debug:
+            var: script_result.stdout_lines
+          when: script_result.changed
+
+
+# ==================== 步骤3: 创建配置文件（复用全局变量） ====================
+- name: 步骤3 - 生成RKE2配置文件
+  hosts: rke2
+  gather_facts: yes
+  vars:
+    rke2_config_dir: /etc/rancher/rke2
+    rke2_data_dir: "{{ global_data_dir }}"
+    first_master: "{{ global_local_address }}"
+  
+  tasks:
+    - name: 创建RKE2配置目录
+      file:
+        path: "{{ rke2_config_dir }}"
+        state: directory
+        mode: 0755
+      
+    - name: 为所有节点生成registries.yaml
+      copy:
+        content: |
+          {% if global_mirrors is defined and global_mirrors.endpoint is defined %}
+          mirrors:
+            {{ global_mirrors.endpoint | regex_replace('^https?://', '') }}:
+              endpoint:
+                - {{ global_mirrors.endpoint }}
+          
+          configs:
+            {{ global_mirrors.endpoint | regex_replace('^https?://', '') }}:
+              auth:
+                username: "{{ global_mirrors.auth.username }}"
+                password: "{{ global_mirrors.auth.password }}"
+              tls:
+                insecure_skip_verify: true
+          {% endif %}
+        dest: "{{ rke2_config_dir }}/registries.yaml"
+        mode: 0600
+      
+    - name: 从facts获取实际主机名
+      set_fact:
+        node_hostname: "{{ ansible_facts['hostname'] }}"
+    
+    - name: 判断节点类型（通过主机组）
+      set_fact:
+        is_first_master: "{{ inventory_hostname == first_master }}"
+        is_master: "{{ 'rke2-masters' in group_names }}"
+        is_worker: "{{ 'rke2-workers' in group_names }}"
+    
+    - name: 显示节点类型判断结果
+      debug:
+        msg: |
+          节点 {{ inventory_hostname }} 类型判断:
+          主机组: {{ group_names }}
+          主机名: {{ node_hostname }}
+          是否第一个master: {{ is_first_master }}
+          是否master节点: {{ is_master }}
+          是否worker节点: {{ is_worker }}"
+    
+    - name: 为每个节点生成config.yaml (不含token，等待master1生成)
+      copy:
+        content: |
+          # Global settings
+          write-kubeconfig-mode: "0600"
+          cni: {{ global_cni }}
+          data-dir: {{ rke2_data_dir }}
+          private-registry: "/etc/rancher/rke2/registries.yaml"
+          
+          # Node name - using actual hostname
+          node-name: {{ node_hostname }}
+          
+          {% if is_master %}
+            {% if is_first_master %}
+          # Master1 specific settings
+          tls-san:
+            - {{ first_master }}
+            - {{ node_hostname }}
+          etcd-snapshot-retention: 10
+          etcd-arg:
+            - "--listen-metrics-urls=http://0.0.0.0:2381"
+          kube-proxy-arg:
+            - "--metrics-bind-address=0.0.0.0:10249"
+          kube-controller-manager-arg:
+            - "--bind-address=0.0.0.0"
+          kube-scheduler-arg:
+            - "--bind-address=0.0.0.0"
+            {% else %}
+          # Additional master nodes
+          server: https://{{ first_master }}:9345
+          tls-san:
+            - {{ inventory_hostname }}
+            - {{ node_hostname }}
+          kube-proxy-arg:
+            - "--metrics-bind-address=0.0.0.0:10249"
+            {% endif %}
+          {% elif is_worker %}
+          # Worker nodes
+          server: https://{{ first_master }}:9345
+          kube-proxy-arg:
+            - "--metrics-bind-address=0.0.0.0:10249"
+          {% endif %}
+          
+          {# Ingress配置逻辑 #}
+          {% if global_master_ingress == false and is_master %}
+          # Disable ingress on master node
+          disable: rke2-ingress-nginx
+          {% endif %}
+          {% if global_worker_ingress == false and is_worker %}
+          # Disable ingress on worker node
+          disable: rke2-ingress-nginx
+          {% endif %}
+        dest: "{{ rke2_config_dir }}/config.yaml"
+        mode: 0600
+      
+    - name: 验证生成的配置
+      debug:
+        msg: |
+          为 {{ inventory_hostname }} 生成的配置
+          实际主机名: {{ node_hostname }}
+          节点类型: {% if is_master %}Master{% elif is_worker %}Worker{% else %}Unknown{% endif %}
+          是否是第一个master: {{ is_first_master }}
+          Ingress状态: 
+            {% if is_master %}
+              Master: {{ global_master_ingress }} ({% if global_master_ingress == false %}已禁用{% else %}已启用{% endif %})
+            {% elif is_worker %}
+              Worker: {{ global_worker_ingress }} ({% if global_worker_ingress == false %}已禁用{% else %}已启用{% endif %})
+            {% endif %}"
+
+
+# ==================== 步骤4: 启动第一个master节点（local_address） ====================
+- name: 步骤4 - 启动第一个master节点（local_address）
+  hosts: rke2-masters
+  vars:
+    rke2_config_dir: /etc/rancher/rke2
+    rke2_data_dir: "{{ global_data_dir }}"
+    rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
+    first_master: "{{ global_local_address }}"
+  
+  pre_tasks:
+    - name: 检查当前节点是否是 local_address
+      set_fact:
+        is_local_address: "{{ inventory_hostname == global_local_address }}"
+    
+    - name: 如果不是local_address则跳过整个play
+      meta: end_host
+      when: not is_local_address
+  
+  tasks:
+    - name: 检查RKE2是否已安装
+      stat:
+        path: "{{ rke2_data_dir }}/bin/rke2"
+      register: rke2_installed
+    
+    - name: 安装第一个master节点
+      shell: |
+        cd {{ rke2_artifacts_dir }}
+        export INSTALL_RKE2_ARTIFACT_PATH={{ rke2_artifacts_dir }}
+        export INSTALL_RKE2_TYPE=server
+        export INSTALL_RKE2_ARCH=amd64
+        bash install.sh
+      when: not rke2_installed.stat.exists
+    
+    - name: 启用并启动rke2-server服务
+      systemd:
+        name: rke2-server
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      register: start_result
+      retries: 30
+      delay: 20
+      until: 
+        - start_result is succeeded
+        - start_result.status.ActiveState is defined
+        - start_result.status.ActiveState == "active"
+    
+    - name: 检查服务状态
+      debug:
+        msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
+    
+    - name: 等待RKE2完全启动
+      shell: |
+        timeout 120 bash -c 'until {{ rke2_data_dir }}/bin/kubectl --kubeconfig {{ rke2_config_dir }}/rke2.yaml get nodes 2>/dev/null; do sleep 2; done'
+      register: wait_result
+      failed_when: false
+      changed_when: false
+    
+    - name: 配置环境变量
+      block:
+        - name: 创建rke2.sh环境变量文件
+          copy:
+            dest: /etc/profile.d/rke2.sh
+            content: |
+              export PATH=$PATH:{{ rke2_data_dir }}/bin
+              export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+            mode: 0644
+        
+        - name: 配置ctr命令和crictl
+          lineinfile:
+            path: /etc/profile
+            line: 'alias ctr="{{ rke2_data_dir }}/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io"'
+        
+        - name: 配置CRI_CONFIG_FILE
+          lineinfile:
+            path: /etc/profile
+            line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
+        
+        - name: 配置containerd.sock软链接
+          copy:
+            dest: /etc/tmpfiles.d/containerd-sock.conf
+            content: 'L /run/containerd/containerd.sock - - - - /run/k3s/containerd/containerd.sock'
+        
+        - name: 使配置立即生效
+          shell: systemd-tmpfiles --create /etc/tmpfiles.d/containerd-sock.conf
+        
+        - name: 验证软链接
+          shell: ls -la /run/containerd/
+          register: symlink_check
+          changed_when: false
+        
+        - name: 显示软链接状态
+          debug:
+            msg: "{{ symlink_check.stdout_lines }}"
+    
+    - name: 显示master1安装完成信息
+      debug:
+        msg: |
+          =========================================
+          第一个master节点安装完成!
+          节点: {{ inventory_hostname }}
+          角色: local_address (第一个master)
+          =========================================
+
+
+# ==================== 步骤5: 更新其他节点的配置文件 ====================
+- name: 步骤5 - 从local_address获取token并更新配置
+  hosts: rke2
+  vars:
+    rke2_config_dir: /etc/rancher/rke2
+    rke2_data_dir: "{{ global_data_dir }}"
+    first_master: "{{ global_local_address }}"
+  
+  pre_tasks:
+    - name: 检查当前节点是否是local_address
+      set_fact:
+        is_local_address: "{{ inventory_hostname == global_local_address }}"
+    
+    - name: 如果是local_address则跳过整个play
+      meta: end_host
+      when: is_local_address
+  
+  tasks:
+    - name: 从local_address节点获取token
+      delegate_to: "{{ first_master }}"
+      run_once: yes
+      shell: cat {{ rke2_data_dir }}/server/node-token
+      register: token_result
+      ignore_errors: yes
+    
+    - name: 设置token为变量
+      set_fact:
+        token_from_master: "{{ token_result.stdout | default('') }}"
+      run_once: yes
+    
+    - name: 验证token是否获取到
+      debug:
+        msg: "从local_address节点获取的token: {{ token_from_master | default('未获取到') }}"
+      run_once: yes
+    
+    - name: 更新配置文件添加token（master节点）
+      blockinfile:
+        path: "{{ rke2_config_dir }}/config.yaml"
+        block: |
+          token: {{ token_from_master }}
+          server: https://{{ first_master }}:9345
+        insertbefore: "^# Global settings"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - TOKEN"
+      when: 
+        - token_from_master | length > 0
+        - inventory_hostname in global_master_list
+    
+    - name: 更新配置文件添加token（worker节点）
+      blockinfile:
+        path: "{{ rke2_config_dir }}/config.yaml"
+        block: |
+          token: {{ token_from_master }}
+          server: https://{{ first_master }}:9345
+        insertbefore: "^# Global settings"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - TOKEN"
+      when: 
+        - token_from_master | length > 0
+        - inventory_hostname in global_worker_list
+    
+    - name: 显示更新后的配置
+      shell: head -10 {{ rke2_config_dir }}/config.yaml
+      register: config_check
+      changed_when: false
+      when: token_from_master | length > 0
+    
+    - name: 显示配置前几行
+      debug:
+        msg: "{{ config_check.stdout_lines }}"
+      when: config_check is defined and config_check.stdout is defined
+
+
+# ==================== 步骤6: 启动其他master节点 ====================
+- name: 步骤6 - 启动其他master节点
+  hosts: rke2-masters
+  vars:
+    rke2_config_dir: /etc/rancher/rke2
+    rke2_data_dir: "{{ global_data_dir }}"
+    rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
+    first_master: "{{ global_local_address }}"
+  
+  pre_tasks:
+    - name: 检查当前节点是否是local_address
+      set_fact:
+        is_local_address: "{{ inventory_hostname == global_local_address }}"
+    
+    - name: 如果是local_address则跳过整个play
+      meta: end_host
+      when: is_local_address
+  
+  tasks:
+    - name: 检查RKE2是否已安装
+      stat:
+        path: "{{ rke2_data_dir }}/bin/rke2"
+      register: rke2_installed
+    
+    - name: 安装其他master节点
+      shell: |
+        cd {{ rke2_artifacts_dir }}
+        export INSTALL_RKE2_ARTIFACT_PATH={{ rke2_artifacts_dir }}
+        export INSTALL_RKE2_TYPE=server
+        export INSTALL_RKE2_ARCH=amd64
+        bash install.sh
+      when: not rke2_installed.stat.exists
+    
+    - name: 启用并启动rke2-server服务
+      systemd:
+        name: rke2-server
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      register: start_result
+      retries: 30
+      delay: 20
+      until: 
+        - start_result is succeeded
+        - start_result.status.ActiveState is defined
+        - start_result.status.ActiveState == "active"
+    
+    - name: 检查服务状态
+      debug:
+        msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
+    
+    - name: 配置环境变量
+      block:
+        - name: 创建rke2.sh环境变量文件
+          copy:
+            dest: /etc/profile.d/rke2.sh
+            content: |
+              export PATH=$PATH:{{ rke2_data_dir }}/bin
+              export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+            mode: 0644
+        
+        - name: 配置ctr命令和crictl
+          lineinfile:
+            path: /etc/profile
+            line: 'alias ctr="{{ rke2_data_dir }}/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io"'
+        
+        - name: 配置CRI_CONFIG_FILE
+          lineinfile:
+            path: /etc/profile
+            line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
+        
+        - name: 配置containerd.sock软链接
+          copy:
+            dest: /etc/tmpfiles.d/containerd-sock.conf
+            content: 'L /run/containerd/containerd.sock - - - - /run/k3s/containerd/containerd.sock'
+        
+        - name: 使配置立即生效
+          shell: systemd-tmpfiles --create /etc/tmpfiles.d/containerd-sock.conf
+        
+        - name: 验证软链接
+          shell: ls -la /run/containerd/
+          register: symlink_check
+          changed_when: false
+        
+        - name: 显示软链接状态
+          debug:
+            msg: "{{ symlink_check.stdout_lines }}"
+    
+    - name: 显示其他master节点安装完成信息
+      debug:
+        msg: "其他master节点 {{ inventory_hostname }} 安装完成!"
+
+# ==================== 步骤7: 启动worker节点 ====================
+- name: 步骤7 - 启动worker节点
+  hosts: rke2-workers
+  vars:
+    rke2_config_dir: /etc/rancher/rke2
+    rke2_data_dir: "{{ global_data_dir }}"
+    rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
+    first_master: "{{ global_local_address }}"
+  
+  tasks:
+    - name: 检查RKE2是否已安装
+      stat:
+        path: "{{ rke2_data_dir }}/bin/rke2"
+      register: rke2_installed
+    
+    - name: 安装worker节点
+      shell: |
+        cd {{ rke2_artifacts_dir }}
+        export INSTALL_RKE2_ARTIFACT_PATH={{ rke2_artifacts_dir }}
+        export INSTALL_RKE2_TYPE=agent
+        export INSTALL_RKE2_ARCH=amd64
+        bash install.sh
+      when: not rke2_installed.stat.exists
+    
+    - name: 启用并启动rke2-agent服务
+      systemd:
+        name: rke2-agent
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      register: start_result
+      retries: 30
+      delay: 20
+      until: 
+        - start_result is succeeded
+        - start_result.status.ActiveState is defined
+        - start_result.status.ActiveState == "active"
+    
+    - name: 检查服务状态
+      debug:
+        msg: "节点 {{ inventory_hostname }} 的rke2-agent服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
+    
+    - name: 配置环境变量
+      block:
+        - name: 创建rke2.sh环境变量文件
+          copy:
+            dest: /etc/profile.d/rke2.sh
+            content: |
+              export PATH=$PATH:{{ rke2_data_dir }}/bin
+            mode: 0644
+        
+        - name: 配置ctr命令和crictl
+          lineinfile:
+            path: /etc/profile
+            line: 'alias ctr="{{ rke2_data_dir }}/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io"'
+        
+        - name: 配置CRI_CONFIG_FILE
+          lineinfile:
+            path: /etc/profile
+            line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
+        
+        - name: 配置containerd.sock软链接
+          copy:
+            dest: /etc/tmpfiles.d/containerd-sock.conf
+            content: 'L /run/containerd/containerd.sock - - - - /run/k3s/containerd/containerd.sock'
+        
+        - name: 使配置立即生效
+          shell: systemd-tmpfiles --create /etc/tmpfiles.d/containerd-sock.conf
+        
+        - name: 验证软链接
+          shell: ls -la /run/containerd/
+          register: symlink_check
+          changed_when: false
+        
+        - name: 显示软链接状态
+          debug:
+            msg: "{{ symlink_check.stdout_lines }}"
+    
+    - name: 显示worker节点安装完成信息
+      debug:
+        msg: "Worker节点 {{ inventory_hostname }} 安装完成!"
+
+# ==================== 步骤8: 最终验证 ====================
+# 8.1 先获取变量
+- name: 步骤8.1 - 获取验证变量
+  hosts: localhost
+  connection: local
+  gather_facts: no
+  tasks:
+    - name: 设置验证变量
+      set_fact:
+        verify_host: "{{ hostvars['localhost']['global_local_address'] }}"
+        rke2_data_dir: "{{ hostvars['localhost']['global_data_dir'] }}"
+
+# ==================== 步骤8: 最终验证 ====================
+- name: 步骤8 - 集群最终验证
+  hosts: localhost  # 在第一个master上验证
+  vars:
+    rke2_config_dir: /etc/rancher/rke2
+    rke2_data_dir: "{{ global_data_dir }}"
+    first_master: "{{ global_local_address }}"
+  
+  tasks:
+    - name: 等待集群完全就绪
+      shell: |
+        timeout 180 bash -c '
+        until {{ rke2_data_dir }}/bin/kubectl --kubeconfig {{ rke2_config_dir }}/rke2.yaml get nodes 2>/dev/null | grep -q "Ready"; do
+          echo "等待节点就绪..."
+          sleep 5
+        done'
+      register: wait_cluster
+      changed_when: false
+    
+    - name: 显示集群节点状态
+      shell: |
+        echo "========================================="
+        echo "RKE2集群部署完成!"
+        echo "集群节点状态:"
+        {{ rke2_data_dir }}/bin/kubectl --kubeconfig {{ rke2_config_dir }}/rke2.yaml get nodes
+        echo "========================================="
+      register: final_output
+      changed_when: false
+      ignore_errors: true
+    
+    - name: 打印最终输出
+      debug:
+        msg: "{{ final_output.stdout_lines }}"
