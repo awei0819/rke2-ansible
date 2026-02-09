@@ -1,9 +1,7 @@
 # 目录文件说明
 
 ```
-ansible_install_pkg/    # ansible安装包和python编译包（3.10.12）
 cluster.yaml            # 核心配置文件，通过此文件来自动生成rke2的配置文件/etc/rancher/rke2/config.yaml
-create_tls.sh           # 自签证书脚本 100年
 hosts/                  # 存放ansible-hosts文件（执行安装脚本自动生成）
 playbooks/              # 存放playbook文件（安装和卸载）
 README.txt              # 说明文档
