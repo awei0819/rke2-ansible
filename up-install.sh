@@ -64,7 +64,7 @@ $Del_Masters
 $Del_Workers
 "
 
-# 从hosts/ansible-hosts文件中获取删除节点的端口（关键修复）
+# 从hosts/ansible-hosts文件中获取删除节点的端口
 # 只从[rke2]组中查找，避免重复
 Del_Masters_Port=$(
     for ip in $Del_Masters; do
@@ -131,7 +131,7 @@ init_hosts(){
     echo ""
 }
 
-# 更新新增节点的ansible hosts文件（逻辑和init_hosts一致）
+# 更新新增节点的ansible hosts文件
 update_hosts(){
     echo "==== init ansible-hosts-up"
     echo "[rke2]" > hosts/ansible-hosts-up
@@ -185,7 +185,7 @@ delete_hosts(){
 
 
 
-#------部署流程
+#-------------------------------部署流程
 if [[ ! -d hosts ]];then
     mkdir -p hosts
 fi
