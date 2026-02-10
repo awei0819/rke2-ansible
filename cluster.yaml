@@ -1,0 +1,45 @@
+# 本机IP
+local_address: 192.168.80.31
+
+# master主机列表:ssh端口
+master:
+  - 192.168.80.31:22
+  - 192.168.80.32:22
+  - 192.168.80.33:22
+
+# worker主机列表:ssh端口，没有可以注释或删除
+worker:
+  - 192.168.80.34:22
+
+# 全局数据目录
+data_dir: /data/rke2
+
+# cni calico[暂只支持calico]
+cni: calico
+
+# 有不同网卡可适配多个，逗号分隔，只适用calico
+calico_net: ens*
+
+# ingress部署开关
+master_ingress: true
+worker_ingress: false
+
+# 镜像仓库配置
+registries:
+  # 如果不需要镜像加速，可以删除整个mirrors部分
+  mirrors:
+    docker.io:
+      endpoint:
+        - https://docker.mirrors.ustc.edu.cn
+        - https://registry.aliyuncs.com
+
+  # 如果不需要私有仓库，可以删除整个configs部分
+  configs:
+    harbor.local.com:
+      auth:
+        username: "admin"
+        password: "Harbor12345"
+      tls:
+        insecure_skip_verify: true
+        #cert_file: /path/to/cert.crt
+        #key_file: /path/to/key.key

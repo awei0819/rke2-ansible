@@ -1,0 +1,261 @@
+---
+# RKE2集群部署后配置Playbook
+- name: 执行集群配置
+  hosts: "{{ kube_host }}"
+  gather_facts: yes
+  vars:
+    # 直接使用命令行传入的变量
+    operation: "{{ operation | default('init') }}"
+    global_master_ingress: "{{ master_ingress | default('false') }}"
+    global_worker_ingress: "{{ worker_ingress | default('false') }}"
+    global_cni: "{{ cni | default('calico') }}"
+    global_calico_net: "{{ calico_net | default('ens*') }}"
+    # 固定值（假设这些路径是标准的）
+    rke2_data_dir: "/data/rke2"
+    rke2_config_dir: "/etc/rancher/rke2"
+  
+  pre_tasks:
+    - name: 显示配置信息
+      debug:
+        msg: |
+          集群配置信息:
+          - 操作类型: {{ operation }}
+          - kube_host: {{ kube_host }}
+          - master_ingress: {{ global_master_ingress }}
+          - worker_ingress: {{ global_worker_ingress }}
+          - cni: {{ global_cni }}
+          - calico_net: {{ global_calico_net }}
+          - rke2_data_dir: {{ rke2_data_dir }}
+          - rke2_config_dir: {{ rke2_config_dir }}
+      run_once: true
+
+    - name: 验证当前节点是否有kubectl访问权限
+      shell: |
+        # 检查kubectl是否可用
+        if command -v kubectl >/dev/null 2>&1; then
+          echo "kubectl found: $(which kubectl)"
+          kubectl version --client 2>/dev/null || echo "kubectl not functional"
+        else
+          # 检查是否有kubeconfig文件
+          if [ -f /root/.kube/config ] || [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+            echo "kubeconfig found but kubectl not in PATH"
+          else
+            echo "ERROR: No kubectl or kubeconfig found"
+            exit 1
+          fi
+        fi
+      register: kubectl_check
+      failed_when: "'ERROR' in kubectl_check.stdout"
+      changed_when: false
+
+  tasks:
+    - name: 设置环境变量
+      shell: |
+        # 设置PATH包含rke2目录
+        export PATH=$PATH:{{ rke2_data_dir }}/bin
+        # 设置KUBECONFIG
+        if [ -f /root/.kube/config ]; then
+          export KUBECONFIG=/root/.kube/config
+        elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+          export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+        fi
+        echo "PATH set to: $PATH"
+        echo "KUBECONFIG set to: $KUBECONFIG"
+      register: env_setup
+      changed_when: false
+    
+    - name: 验证kubectl连接
+      shell: |
+        source /etc/profile 2>/dev/null || true
+        export PATH=$PATH:{{ rke2_data_dir }}/bin
+        if [ -f /root/.kube/config ]; then
+          export KUBECONFIG=/root/.kube/config
+        elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+          export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+        fi
+        kubectl cluster-info 2>/dev/null || kubectl get nodes 2>/dev/null || echo "Checking kubectl access..."
+      register: kubectl_test
+      changed_when: false
+      ignore_errors: true
+    
+    - name: 显示kubectl连接状态
+      debug:
+        msg: |
+          kubectl连接测试:
+          {{ kubectl_test.stdout | default('No output') }}
+          Exit code: {{ kubectl_test.rc }}
+    
+    # ========== 给kube-proxy增加label（init和update都要执行） ==========
+    - name: 给kube-proxy增加label
+      shell: |
+        source /etc/profile 2>/dev/null || true
+        export PATH=$PATH:{{ rke2_data_dir }}/bin
+        if [ -f /root/.kube/config ]; then
+          export KUBECONFIG=/root/.kube/config
+        elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+          export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+        fi
+        
+        echo "开始给kube-proxy增加label..."
+        pods=$(kubectl get pod -n kube-system --show-labels 2>/dev/null | grep kube-proxy | grep -v k8s-app | awk '{print $1}' || echo "")
+        if [ -n "$pods" ]; then
+          for pod in $pods; do
+            echo "Labeling pod: $pod"
+            kubectl label pod -n kube-system $pod k8s-app=kube-proxy 2>/dev/null && echo "  Success" || echo "  Failed or already labeled"
+          done
+        else
+          echo "No kube-proxy pods found without k8s-app label"
+        fi
+      register: label_result
+      changed_when: "'Success' in label_result.stdout or 'Labeled' in label_result.stdout"
+      when: 
+        - operation == "init" or operation == "update"
+    
+    # ========== 更新ingress配置（只在init时执行） ==========
+    - name: 更新ingress配置
+      block:
+        - name: 等待ingress configmap存在
+          shell: |
+            source /etc/profile 2>/dev/null || true
+            export PATH=$PATH:{{ rke2_data_dir }}/bin
+            if [ -f /root/.kube/config ]; then
+              export KUBECONFIG=/root/.kube/config
+            elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+              export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+            fi
+            
+            echo "等待ingress configmap创建..."
+            for i in {1..90}; do
+              if kubectl get cm rke2-ingress-nginx-controller -n kube-system &> /dev/null; then
+                echo "ingress configmap found!"
+                exit 0
+              fi
+              echo "Attempt $i/90: ingress configmap not found yet, waiting..."
+              sleep 2
+            done
+            echo "Timeout waiting for ingress configmap"
+            exit 1
+          when: 
+            - operation == "init"
+            - (global_master_ingress == "true" or global_worker_ingress == "true")
+        
+        - name: 更新ingress configmap
+          shell: |
+            source /etc/profile 2>/dev/null || true
+            export PATH=$PATH:{{ rke2_data_dir }}/bin
+            if [ -f /root/.kube/config ]; then
+              export KUBECONFIG=/root/.kube/config
+            elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+              export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+            fi
+            
+            echo "更新ingress configmap..."
+            kubectl patch cm rke2-ingress-nginx-controller -n kube-system \
+              --type merge \
+              -p '{"data": {
+                "allow-snippet-annotations": "true",
+                "proxy-body-size": "500m",
+                "proxy-read-timeout": "1800",
+                "proxy-send-timeout": "1800",
+                "ssl-redirect": "false"
+              }}'
+            echo "ingress configmap updated successfully"
+          when: 
+            - operation == "init"
+            - (global_master_ingress == "true" or global_worker_ingress == "true")
+          register: patch_result
+          failed_when: patch_result.rc != 0
+        
+        - name: 重启ingress pod
+          shell: |
+            source /etc/profile 2>/dev/null || true
+            export PATH=$PATH:{{ rke2_data_dir }}/bin
+            if [ -f /root/.kube/config ]; then
+              export KUBECONFIG=/root/.kube/config
+            elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+              export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+            fi
+            
+            echo "重启ingress pods..."
+            kubectl delete pod -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx --force --grace-period=0 2>/dev/null || true
+            echo "等待ingress pod就绪 (timeout: 5m)..."
+            kubectl wait --for=condition=Ready pod -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx --timeout=300s
+          when: 
+            - operation == "init"
+            - (global_master_ingress == "true" or global_worker_ingress == "true")
+          register: restart_result
+          failed_when: restart_result.rc != 0
+          ignore_errors: true  # 添加这个，避免因超时而导致整个playbook失败
+    
+    # ========== 修改calico配置（只在init时执行） ==========
+    - name: 修改calico配置
+      block:
+        - name: 等待calico资源就绪
+          shell: |
+            source /etc/profile 2>/dev/null || true
+            export PATH=$PATH:{{ rke2_data_dir }}/bin
+            if [ -f /root/.kube/config ]; then
+              export KUBECONFIG=/root/.kube/config
+            elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+              export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+            fi
+            
+            echo "等待calico installation资源..."
+            for i in {1..90}; do
+              if kubectl get installation default -n calico-system &> /dev/null; then
+                echo "calico installation found!"
+                exit 0
+              fi
+              echo "Attempt $i/90: calico installation not found yet, waiting..."
+              sleep 2
+            done
+            echo "Timeout waiting for calico installation"
+            exit 1
+          when: 
+            - operation == "init"
+            - global_cni == "calico"
+            - global_calico_net | length > 0
+        
+        - name: 修改calico网卡配置
+          shell: |
+            source /etc/profile 2>/dev/null || true
+            export PATH=$PATH:{{ rke2_data_dir }}/bin
+            if [ -f /root/.kube/config ]; then
+              export KUBECONFIG=/root/.kube/config
+            elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+              export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+            fi
+            
+            echo "修改calico网卡配置为: {{ global_calico_net }}"
+            kubectl patch installation default -n calico-system \
+              --type merge \
+              -p "{\"spec\":{\"calicoNetwork\":{\"nodeAddressAutodetectionV4\":{\"interface\":\"{{ global_calico_net }}\", \"firstFound\": null}}}}"
+            echo "calico网卡配置已更新"
+          when: 
+            - operation == "init"
+            - global_cni == "calico"
+            - global_calico_net | length > 0
+          register: calico_patch_result
+          failed_when: calico_patch_result.rc != 0
+    
+    # ========== 显示集群状态 ==========
+    - name: 显示集群状态
+      shell: |
+        source /etc/profile 2>/dev/null || true
+        export PATH=$PATH:{{ rke2_data_dir }}/bin
+        if [ -f /root/.kube/config ]; then
+          export KUBECONFIG=/root/.kube/config
+        elif [ -f {{ rke2_config_dir }}/rke2.yaml ]; then
+          export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
+        fi
+        
+        echo "========================================="
+        echo "集群节点状态:"
+        kubectl get nodes -o wide 2>/dev/null || echo "无法获取节点状态"
+        echo "========================================="
+      register: cluster_status
+      changed_when: false
+    
+    - name: 显示最终状态
+      debug:
+        msg: "{{ cluster_status.stdout_lines }}"
