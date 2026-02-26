@@ -78,6 +78,9 @@ docker.io/awei666666/ansible:20260226-amd64 /bin/bash
 免密
 
 ```
+# 进入容器
+docker exec -it install-rke2-ansible bash
+
 # 填写所有主机信息
 vi /etc/ansible/hosts
 [ssh-copy]
@@ -95,13 +98,11 @@ ansible_ssh_pass=your_password
 192.168.80.31 ansible_port=22 ansible_ssh_pass=password_31
 
 
-cd /data/install-rke2-ansible
-
 # 获取容器内公钥
-docker exec -it install-rke2-ansible cat /root/.ssh/id_rsa.pub
+cat /root/.ssh/id_rsa.pub
 
 # 替换内容
-sed -i 's/^ssh_key.*/ssh_key="<上一步查到的公钥>"/1' ./ssh-copy.sh
+sed -i 's#^ssh_key.*#ssh_key="<上一步查到的公钥>"#1' ./ssh-copy.sh
 
 # 执行免密脚本
 ansible ssh-copy -m script -a "./ssh-copy.sh"
