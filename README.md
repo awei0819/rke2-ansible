@@ -112,11 +112,8 @@ ansible ssh-copy -m script -a "./ssh-copy.sh"
 
 ```
 #------------- 容器内操作 ------------
-# 进入容器
-docker exec -it install-rke2-ansible bash
-
 # 配置 cluster.yaml 文件中有填写说明
-root@7544e5688809:/install-rke2-ansible# vi cluster.yaml
+vi cluster.yaml
 
 # 执行部署，等待安装完毕即可
 bash up-install.sh
