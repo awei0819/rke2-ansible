@@ -131,7 +131,7 @@ init_hosts(){
     echo ""
 }
 
-# 更新新增节点的ansible hosts文件
+# 更新新增节点的ansible hosts文件（逻辑和init_hosts一致）
 update_hosts(){
     echo "==== init ansible-hosts-up"
     echo "[rke2]" > hosts/ansible-hosts-up
@@ -185,7 +185,7 @@ delete_hosts(){
 
 
 
-#-------------------------------部署流程
+#------部署流程
 if [[ ! -d hosts ]];then
     mkdir -p hosts
 fi
@@ -335,13 +335,7 @@ if [[ -z "$Get_Masters" ]]; then
     # 执行安装playbook
     ansible-playbook -i hosts/ansible-hosts playbooks/playbook_install_rke2.yaml || exit 1
     # 执行配置playbook（在local_address节点上执行kubectl操作）
-    ansible-playbook -i hosts/ansible-hosts playbooks/playbook_post_config.yaml \
-      -e "operation=init" \
-      -e "kube_host=$Local_Address" \
-      -e "master_ingress=$master_ingress" \
-      -e "worker_ingress=$worker_ingress" \
-      -e "cni=$CNI" \
-      -e "calico_net=$Calico_Net"
+    ansible-playbook -i hosts/ansible-hosts playbooks/playbook_post_config.yaml -e "operation=init"
     echo "== 部署完成！=="
     printf "\n\n"    
 
@@ -419,11 +413,8 @@ elif echo "$New_Nodes" | egrep -q '([0-9]{1,3}\.){3}[0-9]{1,3}' || echo "$Del_No
         init_hosts
         update_hosts
         ansible-playbook -i hosts/ansible-hosts-up playbooks/playbook_install_rke2.yaml && echo "== OK ==" || exit 1
-        
         # 执行配置playbook（在local_address节点上执行kubectl操作）
-        ansible-playbook -i hosts/ansible-hosts playbooks/playbook_post_config.yaml \
-            -e "operation=update" \
-            -e "kube_host=$Local_Address"
+        ansible-playbook -i hosts/ansible-hosts playbooks/playbook_post_config.yaml -e "operation=update"
         echo "==== 新增节点已完成！ ===="
         printf "\n\n"
     fi

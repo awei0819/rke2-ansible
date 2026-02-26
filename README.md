@@ -2,45 +2,45 @@
 
 通过docker容器（内置ansible及rke2安装包） 一键完成多节点 RKE2 集群的部署与卸载，大幅降低 RKE2 K8S 集群的部署门槛和操作复杂度。
 
-可快速完成生产级别K8S集群离线部署、简单、高效、多版本可复用。
+可快速完成生产级别K8S集群离线部署、简单、高效、多版本可复用。支持多架构混合部署。
 
 RKE2相关信息参考rancher中文社区：https://docs.rancher.cn/docs/rke2/
 
-## 容器内文件说明 ##
+## 文件说明 ##
 
 ```
 /install-rke2-ansible   # 安装脚本目录
+packages                # k8s镜像及rke2安装包存放目录，内有自动打包脚本
 cluster.yaml            # 核心配置文件，通过此文件来自动渲染生成rke2的配置文件/etc/rancher/rke2/config.yaml
 hosts/                  # 存放ansible-hosts文件（执行安装脚本自动生成）
-playbooks/              # 存放playbook文件（安装和卸载）
-README.md               # 说明文档
+playbooks/              # 存放playbook文件（安装、初始化、卸载）
 up-install.sh           # 安装脚本
-
-/rke2-artifacts.tgz     # rke2安装包和k8s组件镜像
+README.md               # 说明文档
 ```
 
 ## 前置要求
 
-1、控制节点 需安装docker服务。
+1、master1作为主控制节点、需安装docker服务。
 
 1、各k8s节点需做好前置初始化工作，关闭防火墙、swap分区等、以满足k8s部署要求。
 
-## 使用docker部署RKE2-K8S集群 v1.34.2
+## 使用ansible容器部署RKE2-K8S集群 v1.34.2
 
 ```
-# 拉取镜像
-docker pull awei666666/rke2-ansible:v1.34.2_amd64_260210
+cd /data
 
-# 配置拷贝，防止丢失
-docker run -itd --name install-rke2-ansible awei666666/rke2-ansible:v1.34.2_260210 /bin/bash
-docker cp install-rke2-ansible:/install-rke2-ansible  /data/
-docker rm -f install-rke2-ansible
+git clone https://github.com/awei0819/rke2-ansible.git
+
+cd rke2-ansible
+
+# 拉取镜像
+docker pull docker.io/awei666666/ansible:20260211
 
 # 启动容器
 docker run -itd --name install-rke2-ansible \
---restart always \
--v /data/install-rke2-ansible:/install-rke2-ansible \
-rke2-ansible:v1.34.2 /bin/bash
+  --restart always \
+  -V $PWD:/install-rke2-ansible \
+docker.io/awei666666/ansible:20260211 /bin/bash
 
 # 获取容器内公钥
 docker exec -it install-rke2-ansible cat /root/.ssh/id_rsa.pub
@@ -119,25 +119,12 @@ mkdir rke2-artifacts && cd rke2-artifacts
 # 这里的下载链接也替换为arm64
 
 wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/rke2-images.linux-amd64.tar.zst
+wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/rke2-images-calico.linux-amd64.tar.zst
 wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/rke2.linux-amd64.tar.gz
 wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/sha256sum-amd64.txt
 wget --no-check-certificate https://rancher-mirror.rancher.cn/rke2/install.sh
 
-# calico的镜像需单独下载，rke2预置镜像包中没有
-mkdir calico && cd calico
-docker pull docker.io/rancher/mirrored-calico-operator:v1.38.7
-docker pull docker.io/rancher/mirrored-calico-node:v3.30.4
-docker pull docker.io/rancher/mirrored-calico-pod2daemon-flexvol:v3.30.4
-docker pull docker.io/rancher/mirrored-calico-cni:v3.30.4
-docker pull docker.io/rancher/mirrored-calico-kube-controllers:v3.30.4
-docker pull docker.io/rancher/mirrored-calico-typha:v3.30.4
 
-docker save -o docker.io-rancher-mirrored-calico-operator_v1.38.7.tar docker.io/rancher/mirrored-calico-operator:v1.38.7
-docker save -o docker.io-rancher-mirrored-calico-node:v3.30.4.tar docker.io/rancher/mirrored-calico-node:v3.30.4
-docker save -o docker.io-rancher-mirrored-calico-pod2daemon-flexvol_v3.30.4.tar docker.io/rancher/mirrored-calico-pod2daemon-flexvol:v3.30.4
-docker save -o docker.io-rancher-mirrored-calico-cni_v3.30.4.tar docker.io/rancher/mirrored-calico-cni:v3.30.4
-docker save -o docker.io-rancher-mirrored-calico-kube-controllers_v3.30.4.tar docker.io/rancher/mirrored-calico-kube-controllers:v3.30.4
-docker save -o docker.io-rancher-mirrored-calico-typha_v3.30.4.tar docker.io/rancher/mirrored-calico-typha:v3.30.4
 
 $ ll rke2-artifacts/
 total 808216

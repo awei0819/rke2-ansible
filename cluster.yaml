@@ -1,4 +1,8 @@
-# 本机IP
+# 节点架构，可混合架构部署
+master_arch: "amd64"
+worker_arch: "amd64"
+
+# 本机IP,master1，必填
 local_address: 192.168.80.31
 
 # master主机列表:ssh端口
@@ -7,11 +11,11 @@ master:
   - 192.168.80.32:22
   - 192.168.80.33:22
 
-# worker主机列表:ssh端口，没有可以注释或删除
+# worker主机列表:ssh端口，没有worker节点可以注释或删除
 worker:
   - 192.168.80.34:22
 
-# 全局数据目录
+# 全局数据目录,结尾必须为rke2
 data_dir: /data/rke2
 
 # cni calico[暂只支持calico]
