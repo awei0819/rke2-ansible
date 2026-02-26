@@ -27,11 +27,11 @@ README.md               # 说明文档
 ## 使用ansible容器部署RKE2-K8S集群 v1.34.2
 
 ```
-cd /data
+# 克隆仓库至数据目录
+git clone https://github.com/awei0819/rke2-ansible.git  /data/install-rke2-ansible
 
-git clone https://github.com/awei0819/rke2-ansible.git
+cd /data/install-rke2-ansible
 
-cd install-rke2-ansible
 
 # 拉取镜像
 docker pull docker.io/awei666666/ansible:20260211
