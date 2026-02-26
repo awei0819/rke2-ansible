@@ -189,27 +189,12 @@ delete_hosts(){
 if [[ ! -d hosts ]];then
     mkdir -p hosts
 fi
+
+# 分离已加入集群的节点和未加入集群的节点
+Joined_Nodes=""   # 已加入集群的节点
+Not_Joined_Nodes=""  # 未加入集群的节点
 #------判断$1位置变量是否为reset
 if [[ $1 == "reset" ]]; then
-    while true; do
-        read -p "WARNNING: 当前操作将清空集群所有节点，请确认输入后继续(y/n): " choice
-        case "$choice" in
-            y|Y)
-                break
-                ;;
-            n|N)
-                exit 0
-                ;;
-            *)
-                echo "输入无效，请重新输入(y/n)。"
-                ;;
-        esac
-    done
-    
-    # 分离已加入集群的节点和未加入集群的节点
-    Joined_Nodes=""   # 已加入集群的节点
-    Not_Joined_Nodes=""  # 未加入集群的节点
-    
     # 检查每个节点是否在集群中
     for i in $All_Nodes; do
         if [[ "$i" != "$Local_Address" ]];then
@@ -222,13 +207,26 @@ if [[ $1 == "reset" ]]; then
             fi
         fi
     done
-    
     echo ""
     echo "节点状态汇总:"
-    echo "已在集群中的节点: $Local_Address $Joined_Nodes"
+    echo "已在集群中的节点: $Joined_Nodes"
     echo "未在集群中的节点: $Not_Joined_Nodes"
     echo "当前控制节点: $Local_Address"
     echo ""
+    while true; do
+        read -p "WARNNING: 当前操作将清空上述所有节点，请确认输入后继续(y/n): " choice
+        case "$choice" in
+            y|Y)
+                break
+                ;;
+            n|N)
+                exit 0
+                ;;
+            *)
+                echo "输入无效，请重新输入(y/n)。"
+                ;;
+        esac
+    done
     
     # 删除已加入集群的节点
     if [[ -n "$Joined_Nodes" ]]; then

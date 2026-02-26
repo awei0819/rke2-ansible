@@ -132,7 +132,7 @@ bash up-install.sh
 # cluster.yaml中 增删节点信息，执行up脚本
 bash up-install.sh
 
-# 集群清理/卸载(cluster.yaml中的所有节点)
+# 集群清理/卸载 cluster.yaml中记录的所有节点
 bash up-install.sh reset
 ```
 

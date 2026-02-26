@@ -572,12 +572,8 @@
           {% endif %}
           
           {# Ingress配置逻辑 #}
-          {% if global_master_ingress == false and is_master %}
-          # Disable ingress on master node
-          disable: rke2-ingress-nginx
-          {% endif %}
-          {% if global_worker_ingress == false and is_worker %}
-          # Disable ingress on worker node
+          {% if global_master_ingress == false and global_worker_ingress == false and is_master %}
+          # 两个都为false时，关闭ingress
           disable: rke2-ingress-nginx
           {% endif %}
         dest: "{{ rke2_config_dir }}/config.yaml"

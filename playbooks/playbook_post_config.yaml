@@ -246,7 +246,104 @@
             - (master_ingress | bool or worker_ingress | bool)
           register: patch_result
           failed_when: patch_result.rc != 0
-        
+
+
+        - name: 等待ingress pod创建
+          shell: |
+            source /etc/profile 2>/dev/null || true
+            export PATH=$PATH:{{ data_dir }}/bin
+            if [ -f /root/.kube/config ]; then
+              export KUBECONFIG=/root/.kube/config
+            elif [ -f {{ data_dir }}/agent/kubeconfig.yaml ]; then
+              export KUBECONFIG={{ data_dir }}/agent/kubeconfig.yaml
+            elif [ -f /etc/rancher/rke2/rke2.yaml ]; then
+              export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+            fi
+            
+            echo "等待ingress pod创建 (timeout: 5m)..."
+            timeout 300 bash -c '
+              while true; do
+                # 检查是否有匹配的pod存在（忽略kubectl get的错误输出）
+                if kubectl get pods -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx,app.kubernetes.io/component=controller | grep -q "ingress-nginx-controller" &>/dev/null ; then
+                  echo "Ingress Pod已创建！"
+                  break
+                fi
+                echo "等待Ingress Pod创建中...（已等待 $((SECONDS)) 秒）"
+                sleep 5  # 每5秒检查一次
+              done'
+          when: 
+            - operation == "init"
+            - (master_ingress | bool or worker_ingress | bool)
+          register: restart_result
+          failed_when: restart_result.rc != 0
+          ignore_errors: true
+
+
+        - name: 调整ingress daemonset节点调度规则
+          shell: |
+            source /etc/profile 2>/dev/null || true
+            export PATH=$PATH:{{ data_dir }}/bin
+            if [ -f /root/.kube/config ]; then
+              export KUBECONFIG=/root/.kube/config
+            elif [ -f {{ data_dir }}/agent/kubeconfig.yaml ]; then
+              export KUBECONFIG={{ data_dir }}/agent/kubeconfig.yaml
+            elif [ -f /etc/rancher/rke2/rke2.yaml ]; then
+              export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+            fi
+            
+            # 定义变量（与Ansible变量映射）
+            MASTER_INGRESS={{ master_ingress | lower }}
+            WORKER_INGRESS={{ worker_ingress | lower }}
+            
+            echo "当前配置: master_ingress=$MASTER_INGRESS, worker_ingress=$WORKER_INGRESS"
+            
+            # 场景1：master_ingress=false（不调度到control-plane节点）
+            if [ "$MASTER_INGRESS" = "false" ] && [ "$WORKER_INGRESS" = "true" ]; then
+              echo "配置Ingress不调度到control-plane节点..."
+              kubectl patch ds rke2-ingress-nginx-controller -n kube-system \
+                --type merge \
+                -p '{
+                  "spec": {
+                    "template": {
+                      "spec": {
+                        "nodeSelector": {
+                          "kubernetes.io/os": "linux",
+                          "node-role.kubernetes.io/control-plane": "!true"
+                        }
+                      }
+                    }
+                  }
+                }'
+            # 场景2：worker_ingress=false（只调度到control-plane节点）
+            elif [ "$MASTER_INGRESS" = "true" ] && [ "$WORKER_INGRESS" = "false" ]; then
+              echo "配置Ingress仅调度到control-plane节点..."
+              kubectl patch ds rke2-ingress-nginx-controller -n kube-system \
+                --type merge \
+                -p '{
+                  "spec": {
+                    "template": {
+                      "spec": {
+                        "nodeSelector": {
+                          "kubernetes.io/os": "linux",
+                          "node-role.kubernetes.io/control-plane": "true"
+                        }
+                      }
+                    }
+                  }
+                }'
+            # 场景3：双方同值（不操作）
+            else
+              echo "master_ingress和worker_ingress同值，不调整调度规则"
+              exit 0
+            fi
+            
+            echo "Ingress DaemonSet调度规则调整完成"
+          when: 
+            - operation == "init"
+            - (master_ingress | bool or worker_ingress | bool)
+          register: ds_patch_result
+          failed_when: ds_patch_result.rc != 0
+
         - name: 重启ingress pod
           shell: |
             source /etc/profile 2>/dev/null || true
@@ -260,17 +357,6 @@
             fi
             
             echo "重启ingress pods..."
-            echo "等待ingress pod创建 (timeout: 5m)..."
-            timeout 300 bash -c '
-              while true; do
-                # 检查是否有匹配的pod存在（忽略kubectl get的错误输出）
-                if kubectl get pods -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx,app.kubernetes.io/component=controller | grep -q "ingress-nginx-controller" &>/dev/null ; then
-                  echo "匹配的Ingress Pod已创建！"
-                  break
-                fi
-                echo "等待Ingress Pod创建中...（已等待 $((SECONDS)) 秒）"
-                sleep 5  # 每5秒检查一次
-              done'
             kubectl delete pod -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx --force --grace-period=0 2>/dev/null || true
             echo "等待ingress pod就绪 (timeout: 5m)..."
             kubectl wait --for=condition=Ready pod -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx --timeout=300s
