@@ -14,6 +14,7 @@ packages                # k8s镜像及rke2安装包存放目录，内有自动�
 cluster.yaml            # 核心配置文件，通过此文件来自动渲染生成rke2的配置文件/etc/rancher/rke2/config.yaml
 hosts/                  # 存放ansible-hosts文件（执行安装脚本自动生成）
 playbooks/              # 存放playbook文件（安装、初始化、卸载）
+ssh-copy.sh             # 免密脚本
 up-install.sh           # 安装脚本
 README.md               # 说明文档
 ```
