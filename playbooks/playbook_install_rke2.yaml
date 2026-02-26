@@ -632,7 +632,7 @@
         bash install.sh
       when: not rke2_installed.stat.exists
     
-    - name: 启用并启动rke2-server服务
+    - name: 启用并启动rke2-server服务(请等待)
       systemd:
         name: rke2-server
         enabled: yes
@@ -867,7 +867,7 @@
         bash install.sh
       when: not rke2_installed.stat.exists
     
-    - name: 启用并启动rke2-server服务
+    - name: 启用并启动rke2-server服务(请等待)
       systemd:
         name: rke2-server
         enabled: yes
@@ -984,7 +984,7 @@
         bash install.sh
       when: not rke2_installed.stat.exists
     
-    - name: 启用并启动rke2-agent服务
+    - name: 启用并启动rke2-agent服务(请等待)
       systemd:
         name: rke2-agent
         enabled: yes
