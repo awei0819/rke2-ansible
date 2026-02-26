@@ -1,6 +1,6 @@
 ## 简介
 
-通过ansible容器 一键完成多节点 RKE2 集群的部署与卸载，大幅降低 RKE2 K8S 集群的部署门槛和操作复杂度。
+通过ansible一键完成多节点 RKE2 集群的部署与卸载，大幅降低 RKE2 K8S 集群的部署门槛和操作复杂度。
 
 可快速完成生产级别K8S集群离线部署、简单、高效、多版本可复用。支持多架构混合部署。
 
@@ -24,7 +24,7 @@ README.md               # 说明文档
 
 1、各k8s节点需做好前置初始化工作，关闭防火墙、swap分区等、以满足k8s部署要求。
 
-## 使用ansible容器部署RKE2-K8S集群 
+## 部署RKE2-K8S集群 
 
 克隆仓库至数据目录
 
@@ -50,9 +50,19 @@ bash download_rke2_artifacts.sh --arch arm64 --release v1.34.2+rke2r1
 
 启动ansible容器
 
+使用ansible容器，避免ansible对宿主机python环境的依赖或版本冲突，满足版本需求的情况下，也可直接在宿主机执行后续操作（不使用ansible容器）
+
+ansible 2.10.8
+
+Python 3.10.12
+
+低于以上版本可自行尝试，或直接使用ansible容器部署，特别是麒麟系统
+
 ```
 # 拉取镜像
-docker pull docker.io/awei666666/ansible:20260211
+docker pull docker.io/awei666666/ansible:20260226-amd64
+或
+docker pull docker.io/awei666666/ansible:20260226-arm64
 
 # 启动容器
 cd /data/install-rke2-ansible
@@ -61,15 +71,39 @@ docker run -itd --name install-rke2-ansible \
   --restart always \
   -v $PWD:/install-rke2-ansible \
   -w /install-rke2-ansible \
-docker.io/awei666666/ansible:20260211 /bin/bash
+docker.io/awei666666/ansible:20260226-amd64 /bin/bash
+```
+
+免密
+
+```
+# 填写所有主机信息
+vi /etc/ansible/hosts
+[ssh-copy]
+192.168.80.31
+192.168.80.32
+192.168.80.33
+192.168.80.34
+[ssh-copy:vars]
+ansible_port=22
+ansible_ssh_pass=your_password
+
+# 如果端口和密码不一致
+[ssh-copy]
+# 格式：主机IP ansible_port=端口号 ansible_ssh_pass=密码
+192.168.80.31 ansible_port=22 ansible_ssh_pass=password_31
+
+
+cd /data/install-rke2-ansible
 
 # 获取容器内公钥
 docker exec -it install-rke2-ansible cat /root/.ssh/id_rsa.pub
 
-# 将ssh_key替换为上一步获取的公钥  在所有节点执行（该容器将对所有节点免密）
-ssh_key="ssh-rsa AAAAB3Ng0Heg630iGmhFBbjU= root@pm-wuhu0004"
-mkdir -p /root/.ssh
-echo "$ssh_key" >>/root/.ssh/authorized_keys
+# 替换内容
+sed -i 's/^ssh_key.*/ssh_key="<上一步查到的公钥>"/1' ./ssh-copy.sh
+
+# 执行免密脚本
+ansible ssh-copy -m script -a "./ssh-copy.sh"
 ```
 
 部署集群

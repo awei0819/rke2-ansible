@@ -44,6 +44,7 @@ registries:
         username: "admin"
         password: "Harbor12345"
       tls:
+        # 跳过证书
         insecure_skip_verify: true
         #cert_file: /path/to/cert.crt
         #key_file: /path/to/key.key
