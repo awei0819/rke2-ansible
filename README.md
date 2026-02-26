@@ -24,19 +24,39 @@ README.md               # 说明文档
 
 1、各k8s节点需做好前置初始化工作，关闭防火墙、swap分区等、以满足k8s部署要求。
 
-## 使用ansible容器部署RKE2-K8S集群 v1.34.2
+## 使用ansible容器部署RKE2-K8S集群 
+
+克隆仓库至数据目录
 
 ```
-# 克隆仓库至数据目录
 git clone https://github.com/awei0819/rke2-ansible.git  /data/install-rke2-ansible
+```
 
-cd /data/install-rke2-ansible
+打包rke2安装包（此处需要网络）
 
+rke2版本参考：https://github.com/rancher/rke2/releases
 
+```
+cd /data/install-rke2-ansible/packages
+
+# 执行打包脚本，必填参数 --arch 架构 --release k8s版本+rke2版本
+bash download_rke2_artifacts.sh --arch amd64 --release v1.34.2+rke2r1
+
+# 单架构只下载一个即可
+bash download_rke2_artifacts.sh --arch arm64 --release v1.34.2+rke2r1
+
+执行后，会在packages目录下生成安装包
+```
+
+启动ansible容器
+
+```
 # 拉取镜像
 docker pull docker.io/awei666666/ansible:20260211
 
 # 启动容器
+cd /data/install-rke2-ansible
+
 docker run -itd --name install-rke2-ansible \
   --restart always \
   -v $PWD:/install-rke2-ansible \
@@ -50,12 +70,14 @@ docker exec -it install-rke2-ansible cat /root/.ssh/id_rsa.pub
 ssh_key="ssh-rsa AAAAB3Ng0Heg630iGmhFBbjU= root@pm-wuhu0004"
 mkdir -p /root/.ssh
 echo "$ssh_key" >>/root/.ssh/authorized_keys
+```
 
+部署集群
+
+```
 #------------- 容器内操作 ------------
 # 进入容器
 docker exec -it install-rke2-ansible bash
-
-cd /install-rke2-ansible
 
 # 配置 cluster.yaml 文件中有填写说明
 root@7544e5688809:/install-rke2-ansible# vi cluster.yaml
@@ -63,6 +85,8 @@ root@7544e5688809:/install-rke2-ansible# vi cluster.yaml
 # 执行部署，等待安装完毕即可
 bash up-install.sh
 ```
+
+
 
 ## 操作说明
 
