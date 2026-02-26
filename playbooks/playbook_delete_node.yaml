@@ -111,6 +111,7 @@
         - /var/lib/kubelet
         - /etc/cni
         - /opt/cni
+        - /run/calico
       ignore_errors: yes
     
     - name: 刷新systemd
