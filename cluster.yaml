@@ -1,4 +1,4 @@
-# 节点架构，可混合架构部署
+# 节点架构，可混合架构部署amd64/arm64
 master_arch: "amd64"
 worker_arch: "amd64"
 
