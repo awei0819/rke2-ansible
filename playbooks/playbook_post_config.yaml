@@ -357,9 +357,7 @@
             fi
             
             echo "重启ingress pods..."
-            kubectl delete pod -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx --force --grace-period=0 2>/dev/null || true
-            echo "等待ingress pod就绪 (timeout: 5m)..."
-            kubectl wait --for=condition=Ready pod -n kube-system -l app.kubernetes.io/instance=rke2-ingress-nginx --timeout=300s
+            kubectl rollout restart ds -n kube-system rke2-ingress-nginx-controller &>/dev/null || true
           when: 
             - operation == "init"
             - (master_ingress | bool or worker_ingress | bool)
