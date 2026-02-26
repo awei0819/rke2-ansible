@@ -16,7 +16,7 @@ hosts/                  # 存放ansible-hosts文件（执行安装脚本自动�
 playbooks/              # 存放playbook文件（安装、初始化、卸载）
 up-install.sh           # 安装脚本
 README.md               # 说明文档
-......
+.........
 ```
 
 ## 前置要求
