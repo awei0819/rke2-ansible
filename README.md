@@ -115,7 +115,7 @@ ansible ssh-copy -m script -a "./ssh-copy.sh"
 # 配置 cluster.yaml 文件中有填写说明
 vi cluster.yaml
 
-# 执行部署，等待安装完毕即可
+# 执行部署，等待k8s集群安装完毕
 bash up-install.sh
 ```
 
@@ -126,6 +126,7 @@ bash up-install.sh
 ```
 # 集群安装
 # 配置好cluster.yaml 执行up脚本、等待集群安装完毕
+# 可新开终端 journalctl -u rke2-server.service -f 查看日志，etcd有报错正常，等待即可
 bash up-install.sh
 
 # 节点扩缩容

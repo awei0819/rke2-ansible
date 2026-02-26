@@ -10,8 +10,8 @@
     - name: 绑定全局变量到localhost（所有节点可通过hostvars访问）
       set_fact:
         # 核心修改1：强化变量过滤（清理所有空白字符，不止首尾）
-        global_master_arch: "{{ master_arch | trim | replace(' ', '') | replace('\n', '') | replace('\r', '') }}"
-        global_worker_arch: "{{ worker_arch | trim | replace(' ', '') | replace('\n', '') | replace('\r', '') }}"
+        global_master_arch: "{{ master_arch }}"
+        global_worker_arch: "{{ worker_arch }}"
         # 原始local_address本身无端口
         global_local_address: "{{ local_address }}"
         # 处理master列表：去掉每个元素的":端口"部分，只保留IP
@@ -84,7 +84,8 @@
           - global_data_dir: {{ global_data_dir }}
           - base_data_dir: {{ base_data_dir }}
           - local_address: {{ global_local_address }}
-          - global_master_arch: |{{ global_master_arch }}|  # 竖线验证无空白
+          - global_master_arch: {{ global_master_arch }}
+          - global_worker_arch: {{ global_worker_arch }}
 
 
 # ==================== 步骤1: 准备目录和解压安装包（复用全局变量） ====================
@@ -96,15 +97,15 @@
     rke2_data_dir: "{{ global_data_dir }}"
     rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
     rke2_images_dir: "{{ rke2_data_dir }}/agent/images"
-    # 强化架构变量过滤（兜底+全空白清理）
+    # 架构变量，- 会清理变量中的空白和换行符
     artifacts_arch: >-
-      {% if 'rke2-masters' in group_names %}
-        {{ global_master_arch | trim | replace(' ', '') | replace('\n', '') | replace('\r', '') }}
-      {% elif 'rke2-workers' in group_names %}
-        {{ global_worker_arch | trim | replace(' ', '') | replace('\n', '') | replace('\r', '') }}
-      {% else %}
-        "amd64"  # 兜底默认值，避免空值
-      {% endif %}
+      {% if 'rke2-masters' in group_names -%}
+        {{ global_master_arch }}
+      {%- elif 'rke2-workers' in group_names -%}
+        {{ global_worker_arch }}
+      {%- else -%}
+        amd64
+      {%- endif %}
     packages_abs_dir: "../packages"
 
   tasks:
@@ -128,7 +129,7 @@
     - name: 调试 - 打印安装包匹配结果
       debug:
         msg:
-          - "架构值：|{{ artifacts_arch }}|"
+          - "架构值：{{ artifacts_arch }}"
           - "安装包目录：{{ packages_abs_dir }}"
           - "匹配到的安装包：{{ real_tarball_path }}"
           - "匹配到的文件数：{{ found_tarballs.matched }}"
@@ -569,6 +570,8 @@
           server: https://{{ first_master }}:9345
           kube-proxy-arg:
             - "--metrics-bind-address=0.0.0.0:10249"
+          node-label:
+            - node-role.kubernetes.io/worker=true
           {% endif %}
           
           {# Ingress配置逻辑 #}
