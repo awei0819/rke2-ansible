@@ -571,7 +571,7 @@
           kube-proxy-arg:
             - "--metrics-bind-address=0.0.0.0:10249"
           node-label:
-            - node-role.kubernetes.io/worker=true
+            - node-role=worker
           {% endif %}
           
           {# Ingress配置逻辑 #}
