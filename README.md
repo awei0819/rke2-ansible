@@ -31,7 +31,7 @@ cd /data
 
 git clone https://github.com/awei0819/rke2-ansible.git
 
-cd rke2-ansible
+cd install-rke2-ansible
 
 # 拉取镜像
 docker pull docker.io/awei666666/ansible:20260211
@@ -39,7 +39,8 @@ docker pull docker.io/awei666666/ansible:20260211
 # 启动容器
 docker run -itd --name install-rke2-ansible \
   --restart always \
-  -V $PWD:/install-rke2-ansible \
+  -v $PWD:/install-rke2-ansible \
+  -w /install-rke2-ansible \
 docker.io/awei666666/ansible:20260211 /bin/bash
 
 # 获取容器内公钥
@@ -54,7 +55,7 @@ echo "$ssh_key" >>/root/.ssh/authorized_keys
 # 进入容器
 docker exec -it install-rke2-ansible bash
 
-cd install-rke2-ansible/
+cd /install-rke2-ansible
 
 # 配置 cluster.yaml 文件中有填写说明
 root@7544e5688809:/install-rke2-ansible# vi cluster.yaml
@@ -77,6 +78,8 @@ bash up-install.sh
 # 集群清理/卸载(cluster.yaml中的所有节点)
 bash up-install.sh reset
 ```
+
+
 
 ## 数据目录说明 ##
 
@@ -101,40 +104,3 @@ bash up-install.sh reset
 # 集群证书
 /data/rke2/server/tls
 ```
-
-## 打包 rke2-artifacts.tgz
-
-下方文件 在[Releases · rancher/rke2](https://github.com/rancher/rke2/releases)均可下载
-
-```
-安装其他k8s版本，或arm64版本，可复用部署脚本，替换此包即可
-打包流程(amd64为例)
-
-# 创建目录
-mkdir rke2-artifacts && cd rke2-artifacts
-
-# 下载rke2安装文件
-# 版本，架构，可自己决定，只要最后的包名为 rke2-artifacts.tgz 即可
-# arm64架构，需要将playbook中的amd64全文替换为arm64（amd支持任意版本）
-# 这里的下载链接也替换为arm64
-
-wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/rke2-images.linux-amd64.tar.zst
-wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/rke2-images-calico.linux-amd64.tar.zst
-wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/rke2.linux-amd64.tar.gz
-wget https://github.com/rancher/rke2/releases/download/v1.34.2%2Brke2r1/sha256sum-amd64.txt
-wget --no-check-certificate https://rancher-mirror.rancher.cn/rke2/install.sh
-
-
-
-$ ll rke2-artifacts/
-total 808216
-drwxr-xr-x 2 root root      4096 Feb  8 13:18 calico_images/
--rwxr-xr-x 1 root root     26276 Feb  8 12:02 install.sh*
--rw-r--r-- 1 root root 787726342 Nov 21 04:30 rke2-images.linux-amd64.tar.zst
--rw-r--r-- 1 root root  39839824 Nov 21 04:30 rke2.linux-amd64.tar.gz
--rw-r--r-- 1 root root      4252 Nov 21 04:30 sha256sum-amd64.txt
-
-# 打包
-tar czvf rke2-artifacts.tgz rke2-artifacts/
-```
-
