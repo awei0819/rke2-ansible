@@ -30,7 +30,6 @@ worker_ingress: false
 
 # 镜像仓库配置
 registries:
-  # 如果不需要镜像加速，可以删除整个mirrors部分
   mirrors:
     docker.io:
       endpoint:
@@ -40,7 +39,6 @@ registries:
       endpoint:
         - https://harbor.local.com
     
-  # 如果不需要私有仓库，可以删除整个configs部分
   configs:
     harbor.local.com:
       auth:
