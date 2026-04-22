@@ -36,7 +36,10 @@ registries:
       endpoint:
         - https://docker.mirrors.ustc.edu.cn
         - https://registry.aliyuncs.com
-
+    harbor.local.com:
+      endpoint:
+        - https://harbor.local.com
+    
   # 如果不需要私有仓库，可以删除整个configs部分
   configs:
     harbor.local.com:
