@@ -12,6 +12,8 @@ fatal: [10.50.66.214]: UNREACHABLE! => {"changed": false, "msg": "Failed to conn
 
 2、restart rke2-server
 
+3、验证仓库配置
+
 
 
 ## 文件说明 ##
