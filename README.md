@@ -7,9 +7,6 @@
 RKE2相关信息参考rancher中文社区：https://docs.rancher.cn/docs/rke2/
 
 待优化：
-1、 TASK [从local_address节点获取token] ********************************************************************************************************************
-fatal: [10.50.66.214]: UNREACHABLE! => {"changed": false, "msg": "Failed to connect to the host via ssh: ssh: connect to host 10.50.161.224 port 22: Connection refused", "unreachable": true}
-
 2、restart rke2-server
 
 3、验证仓库配置
