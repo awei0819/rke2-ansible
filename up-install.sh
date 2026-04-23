@@ -156,6 +156,14 @@ update_hosts(){
         port=$(echo "$node" | awk -F':' '{print $2}')
         echo "$ip ansible_port=$port" >> hosts/ansible-hosts-up
     done
+    echo "" >> hosts/ansible-hosts-up
+
+    # 新增 local_host 组，供 delegate_to 查找 local_address 的 ansible_port
+    local_addr_port=$(cat cluster.yaml | grep "${Local_Address}:" | head -1 | awk -F':' '{print $NF}')
+    if [ -n "$local_addr_port" ]; then
+        echo "[local_host]" >> hosts/ansible-hosts-up
+        echo "$Local_Address ansible_port=$local_addr_port" >> hosts/ansible-hosts-up
+    fi
 
     echo "生成的hosts-up文件:"
     cat hosts/ansible-hosts-up
@@ -327,9 +335,9 @@ if [[ -z "$Get_Masters" ]]; then
     done
 
     #------初始化部署操作
-	echo "==== 初始化hosts文件"
+        echo "==== 初始化hosts文件"
     init_hosts
-	echo ""
+        echo ""
     # 执行安装playbook
     ansible-playbook -i hosts/ansible-hosts playbooks/playbook_install_rke2.yaml || exit 1
     # 执行配置playbook（在local_address节点上执行kubectl操作）
@@ -418,4 +426,3 @@ elif echo "$New_Nodes" | egrep -q '([0-9]{1,3}\.){3}[0-9]{1,3}' || echo "$Del_No
     fi
 else
     echo "当前集群已部署，未检测到需要新增/删除节点，请检查cluster.yaml 并确认您要执行的操作！"
-fi
