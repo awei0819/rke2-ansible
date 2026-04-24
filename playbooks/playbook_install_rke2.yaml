@@ -731,19 +731,24 @@
             path: /etc/profile
             line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
         
+        - name: 清理可能存在的旧文件（避免软链创建失败）
+          file:
+            path: /run/containerd/containerd.sock
+            state: absent
+
         - name: 配置containerd.sock软链接
           copy:
             dest: /etc/tmpfiles.d/containerd-sock.conf
             content: 'L /run/containerd/containerd.sock - - - - /run/k3s/containerd/containerd.sock'
-        
+
         - name: 使配置立即生效
           shell: systemd-tmpfiles --create /etc/tmpfiles.d/containerd-sock.conf
-        
+
         - name: 验证软链接
           shell: ls -la /run/containerd/
           register: symlink_check
           changed_when: false
-        
+
         - name: 显示软链接状态
           debug:
             msg: "{{ symlink_check.stdout_lines }}"
@@ -971,20 +976,25 @@
           lineinfile:
             path: /etc/profile
             line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
-        
+
+        - name: 清理可能存在的旧文件（避免软链创建失败）
+          file:
+            path: /run/containerd/containerd.sock
+            state: absent
+
         - name: 配置containerd.sock软链接
           copy:
             dest: /etc/tmpfiles.d/containerd-sock.conf
             content: 'L /run/containerd/containerd.sock - - - - /run/k3s/containerd/containerd.sock'
-        
+
         - name: 使配置立即生效
           shell: systemd-tmpfiles --create /etc/tmpfiles.d/containerd-sock.conf
-        
+
         - name: 验证软链接
           shell: ls -la /run/containerd/
           register: symlink_check
           changed_when: false
-        
+
         - name: 显示软链接状态
           debug:
             msg: "{{ symlink_check.stdout_lines }}"
@@ -1053,20 +1063,25 @@
           lineinfile:
             path: /etc/profile
             line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
-        
+
+        - name: 清理可能存在的旧文件（避免软链创建失败）
+          file:
+            path: /run/containerd/containerd.sock
+            state: absent
+
         - name: 配置containerd.sock软链接
           copy:
             dest: /etc/tmpfiles.d/containerd-sock.conf
             content: 'L /run/containerd/containerd.sock - - - - /run/k3s/containerd/containerd.sock'
-        
+
         - name: 使配置立即生效
           shell: systemd-tmpfiles --create /etc/tmpfiles.d/containerd-sock.conf
-        
+
         - name: 验证软链接
           shell: ls -la /run/containerd/
           register: symlink_check
           changed_when: false
-        
+
         - name: 显示软链接状态
           debug:
             msg: "{{ symlink_check.stdout_lines }}"
