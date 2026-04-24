@@ -6,11 +6,6 @@
 
 RKE2相关信息参考rancher中文社区：https://docs.rancher.cn/docs/rke2/
 
-待优化：
-2、restart rke2-server
-
-3、验证仓库配置
-
 
 
 ## 文件说明 ##
