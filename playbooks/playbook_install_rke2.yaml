@@ -261,6 +261,9 @@
             echo "=== 证书目录 $ETCD_CERT_DIR 已存在，跳过 ==="
         fi
 
+        # 创建临时 OpenSSL V3 CA 扩展配置（解决 V1 证书缺少 CA:TRUE 的问题）
+        printf '[v3_ca]\nbasicConstraints = critical, CA:TRUE\nkeyUsage = critical, keyCertSign, cRLSign\nsubjectKeyIdentifier = hash\nauthorityKeyIdentifier = keyid:always, issuer\n' > /tmp/openssl-v3ca.cnf
+
         ###########################################################################
         # 3. 自签根 CA 证书（服务器端）：已存在则跳过
         ###########################################################################
@@ -284,6 +287,7 @@
             openssl x509 -req -days 36500 \
                 -in "$SERVER_CA_CSR" \
                 -signkey "$SERVER_CA_KEY" \
+                -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$SERVER_CA_CRT"
             chmod 644 "$SERVER_CA_CRT"  # 证书权限：所有者可读写，其他用户可读
 
@@ -318,6 +322,7 @@
             openssl x509 -req -days 36500 \
                 -in "$CLIENT_CA_CSR" \
                 -signkey "$CLIENT_CA_KEY" \
+                -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$CLIENT_CA_CRT"
             chmod 644 "$CLIENT_CA_CRT"
 
@@ -351,6 +356,7 @@
             openssl x509 -req -days 36500 \
                 -in "$ETCD_SERVER_CSR" \
                 -signkey "$ETCD_SERVER_KEY" \
+                -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$ETCD_SERVER_CRT"
             chmod 644 "$ETCD_SERVER_CRT"
             echo "=== etcd 服务器 CA 证书生成完成 ==="
@@ -377,6 +383,7 @@
             openssl x509 -req -days 36500 \
                 -in "$ETCD_PEER_CSR" \
                 -signkey "$ETCD_PEER_KEY" \
+                -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$ETCD_PEER_CRT"
             chmod 644 "$ETCD_PEER_CRT"
             echo "=== etcd 节点通信 CA 证书生成完成 ==="
@@ -404,6 +411,7 @@
             openssl x509 -req -days 36500 \
                 -in "$REQ_HEADER_CSR" \
                 -signkey "$REQ_HEADER_KEY" \
+                -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$REQ_HEADER_CRT"
 
             echo "=== 设置 request-header CA 权限（私钥 600，证书 644）==="
@@ -644,7 +652,20 @@
         - start_result is succeeded
         - start_result.status.ActiveState is defined
         - start_result.status.ActiveState == "active"
-    
+
+    # ========== 修复 ExecStopPost：解决 restart 时 etcd 端口冲突 ==========
+    - name: 修复 rke2-server ExecStopPost（解决 etcd 端口冲突问题）
+      lineinfile:
+        path: /usr/local/lib/systemd/system/rke2-server.service
+        regexp: '^ExecStopPost=.*'
+        line: 'ExecStopPost=-/bin/sh -c "systemd-cgls /system.slice/%n | grep -Eo '\''[0-9]+ (containerd|kubelet)'\'' | awk '\''{print $1}'\'' | xargs -r kill; ps -ef | egrep "server/db/etcd/config$" | grep -v grep | awk '\''{print $2}'\'' | xargs kill -9 2>/dev/null || true"'
+      register: execstoppost_fix
+
+    - name: 重载 systemd 配置
+      systemd:
+        daemon_reload: yes
+      when: execstoppost_fix is changed
+
     - name: 检查服务状态
       debug:
         msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
@@ -879,7 +900,20 @@
         - start_result is succeeded
         - start_result.status.ActiveState is defined
         - start_result.status.ActiveState == "active"
-    
+
+    # ========== 修复 ExecStopPost：解决 restart 时 etcd 端口冲突 ==========
+    - name: 修复 rke2-server ExecStopPost（解决 etcd 端口冲突问题）
+      lineinfile:
+        path: /usr/local/lib/systemd/system/rke2-server.service
+        regexp: '^ExecStopPost=.*'
+        line: 'ExecStopPost=-/bin/sh -c "systemd-cgls /system.slice/%n | grep -Eo '\''[0-9]+ (containerd|kubelet)'\'' | awk '\''{print $1}'\'' | xargs -r kill; ps -ef | egrep "server/db/etcd/config$" | grep -v grep | awk '\''{print $2}'\'' | xargs kill -9 2>/dev/null || true"'
+      register: execstoppost_fix
+
+    - name: 重载 systemd 配置
+      systemd:
+        daemon_reload: yes
+      when: execstoppost_fix is changed
+
     - name: 检查服务状态
       debug:
         msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
