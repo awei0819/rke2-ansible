@@ -658,7 +658,8 @@
       lineinfile:
         path: /usr/local/lib/systemd/system/rke2-server.service
         regexp: '^ExecStopPost=.*'
-        line: 'ExecStopPost=-/bin/sh -c "systemd-cgls /system.slice/%n | grep -Eo '\''[0-9]+ (containerd|kubelet)'\'' | awk '\''{print $1}'\'' | xargs -r kill; ps -ef | egrep "server/db/etcd/config$" | grep -v grep | awk '\''{print $2}'\'' | xargs kill -9 2>/dev/null || true"'
+        line: |-
+          ExecStopPost=-/bin/sh -c "systemd-cgls /system.slice/%n | grep -Eo '[0-9]+ (containerd|kubelet)' | awk '{print $1}' | xargs -r kill; ps -ef | egrep 'server/db/etcd/config$' | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true"
       register: execstoppost_fix
 
     - name: 重载 systemd 配置
@@ -911,7 +912,8 @@
       lineinfile:
         path: /usr/local/lib/systemd/system/rke2-server.service
         regexp: '^ExecStopPost=.*'
-        line: 'ExecStopPost=-/bin/sh -c "systemd-cgls /system.slice/%n | grep -Eo '\''[0-9]+ (containerd|kubelet)'\'' | awk '\''{print $1}'\'' | xargs -r kill; ps -ef | egrep "server/db/etcd/config$" | grep -v grep | awk '\''{print $2}'\'' | xargs kill -9 2>/dev/null || true"'
+        line: |-
+          ExecStopPost=-/bin/sh -c "systemd-cgls /system.slice/%n | grep -Eo '[0-9]+ (containerd|kubelet)' | awk '{print $1}' | xargs -r kill; ps -ef | egrep 'server/db/etcd/config$' | grep -v grep | awk '{print $2}' | xargs kill -9 2>/dev/null || true"
       register: execstoppost_fix
 
     - name: 重载 systemd 配置
