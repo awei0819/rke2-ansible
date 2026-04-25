@@ -78,7 +78,7 @@ docker.io/awei666666/ansible:20260226-amd64 /bin/bash
 ```
 
 免密
-
+后续添加新节点，仍需按先执行免密
 ```
 # 进入容器
 docker exec -it install-rke2-ansible bash
