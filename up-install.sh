@@ -426,3 +426,4 @@ elif echo "$New_Nodes" | egrep -q '([0-9]{1,3}\.){3}[0-9]{1,3}' || echo "$Del_No
     fi
 else
     echo "当前集群已部署，未检测到需要新增/删除节点，请检查cluster.yaml 并确认您要执行的操作！"
+fi
