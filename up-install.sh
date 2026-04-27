@@ -22,7 +22,7 @@ master_ingress=$(cat cluster.yaml | egrep "^master_ingress:" | awk -F' ' '{print
 worker_ingress=$(cat cluster.yaml | egrep "^worker_ingress:" | awk -F' ' '{print $NF}')
 
 Local_Address=$(cat cluster.yaml | grep local_address | awk -F' ' '{print $NF}')
-Local_Port=$(cat cluster.yaml | grep ${Local_Address}: | awk -F ':' '{print $NF}')
+Local_Port=$(cat cluster.yaml | grep ${Local_Address}: | head -n 1 |awk -F ':' '{print $NF}')
 
 Get_Masters="$(ssh $Local_Address -p $Local_Port kubectl get node -o wide 2> /dev/null | egrep "master|control-plane" | awk '{print $6}')"
 Get_Workers="$(ssh $Local_Address -p $Local_Port kubectl get node -o wide 2> /dev/null | egrep -v "master|control-plane|STATUS" | awk '{print $6}')"
