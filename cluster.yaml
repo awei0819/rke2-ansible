@@ -5,7 +5,7 @@ worker_arch: "amd64"
 # 本机IP,master1，必填
 local_address: 192.168.80.32
 
-# master主机列表:ssh端口
+# master主机列表:ssh端口,master1需要写在第一个
 master:
   - 192.168.80.31:8022
   - 192.168.80.32:8022
