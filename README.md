@@ -102,7 +102,7 @@ ansible_ssh_pass=your_password
 192.168.80.31 ansible_port=22 ansible_ssh_pass=password_31
 
 
-# 获取容器内/宿主机公钥
+# 获取容器内公钥
 cat /root/.ssh/id_rsa.pub
 
 # 替换内容
