@@ -49,7 +49,7 @@ registries:
         #key_file: /path/to/key.key
 
 # ---------- Master VIP 高可用配置 ----------
-# 需提前部署keepalived或准备好LB的IP地址确认负载没问题
+# 需提前部署keepalived或准备好LB的IP地址确认负载没问题，负载端口为：9345、6443
 master_vip:
   # 是否启用VIP（true/false）
   enable: false
