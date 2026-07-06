@@ -53,6 +53,8 @@ bash download_rke2_artifacts.sh --arch arm64 --release v1.34.2+rke2r1
 
 启动ansible容器
 
+若宿主机ansible可用，则可以不使用ansible容器
+
 使用ansible容器，避免ansible对宿主机python环境的依赖或版本冲突，满足版本需求的情况下，也可直接在宿主机执行后续操作（不使用ansible容器）
 
 ansible 2.10.8
@@ -100,7 +102,7 @@ ansible_ssh_pass=your_password
 192.168.80.31 ansible_port=22 ansible_ssh_pass=password_31
 
 
-# 获取容器内公钥
+# 获取容器内/宿主机公钥
 cat /root/.ssh/id_rsa.pub
 
 # 替换内容
