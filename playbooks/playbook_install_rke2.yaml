@@ -26,6 +26,14 @@
         global_registries: "{{ registries }}"
         # 用dirname过滤器提取data_dir中rke2前面的路径
         base_data_dir: "{{ data_dir | dirname }}"
+        # 新增：RKE2 自定义配置（从 cluster.yaml 读取，缺省为空字典）
+        global_rke2_master_config: "{{ rke2_master_config | default({}) }}"
+        global_rke2_worker_config: "{{ rke2_worker_config | default({}) }}"
+        # 新增 VIP 配置
+        global_master_vip_enable: "{{ master_vip.enable | default(false) }}"
+        global_master_vip: "{{ master_vip.vip | default('') }}"
+        # 新增第一个 master 的 SSH 端口（用于 token 获取）
+        global_first_master_port: "{{ master[0].split(':')[1] | default(22) }}"
     
 # ========== 前置验证（只在localhost执行） ==========
     - name: 验证cluster.yaml配置
@@ -55,6 +63,7 @@
           - worker节点数: {{ global_worker_list | length }} 个
           - 数据目录: {{ global_data_dir }}
           - CNI: {{ global_cni }}
+          - VIP启用: {{ global_master_vip_enable }} {% if global_master_vip_enable %}(VIP: {{ global_master_vip }}){% endif %}
           =========================================
 
 
@@ -76,6 +85,11 @@
         global_worker_ingress: "{{ hostvars['localhost']['global_worker_ingress'] }}"
         global_registries: "{{ hostvars['localhost']['global_registries'] }}"
         base_data_dir: "{{ hostvars['localhost']['base_data_dir'] }}"
+        global_rke2_master_config: "{{ hostvars['localhost']['global_rke2_master_config'] }}"
+        global_rke2_worker_config: "{{ hostvars['localhost']['global_rke2_worker_config'] }}"
+        global_master_vip_enable: "{{ hostvars['localhost']['global_master_vip_enable'] }}"
+        global_master_vip: "{{ hostvars['localhost']['global_master_vip'] }}"
+        global_first_master_port: "{{ hostvars['localhost']['global_first_master_port'] }}"
     
     - name: 验证变量已同步
       debug:
@@ -86,6 +100,7 @@
           - local_address: {{ global_local_address }}
           - global_master_arch: {{ global_master_arch }}
           - global_worker_arch: {{ global_worker_arch }}
+          - VIP启用: {{ global_master_vip_enable }}
 
 
 # ==================== 步骤1: 准备目录和解压安装包（复用全局变量） ====================
@@ -540,56 +555,74 @@
     - name: 为每个节点生成config.yaml (不含token，等待master1生成)
       copy:
         content: |
-          # Global settings
-          write-kubeconfig-mode: "0600"
-          cni: {{ global_cni }}
-          data-dir: {{ rke2_data_dir }}
-          private-registry: "/etc/rancher/rke2/registries.yaml"
-          
-          # Node name - using actual hostname
-          node-name: {{ node_hostname }}
-          
-          {% if is_master %}
-            {% if is_first_master %}
-          # Master1 specific settings
-          tls-san:
-            - {{ first_master }}
-            - {{ node_hostname }}
-          etcd-snapshot-retention: 10
-          etcd-arg:
-            - "--listen-metrics-urls=http://0.0.0.0:2381"
-          kube-proxy-arg:
-            - "--metrics-bind-address=0.0.0.0:10249"
-          kube-controller-manager-arg:
-            - "--bind-address=0.0.0.0"
-          kube-scheduler-arg:
-            - "--bind-address=0.0.0.0"
-            {% else %}
-          # Additional master nodes
-          server: https://{{ first_master }}:9345
-          tls-san:
-            - {{ inventory_hostname }}
-            - {{ node_hostname }}
-          kube-proxy-arg:
-            - "--metrics-bind-address=0.0.0.0:10249"
-            {% endif %}
-          {% elif is_worker %}
-          # Worker nodes
-          server: https://{{ first_master }}:9345
-          kube-proxy-arg:
-            - "--metrics-bind-address=0.0.0.0:10249"
-          node-label:
-            - node-role=worker
-          {% endif %}
-          
-          {# Ingress配置逻辑 #}
-          {% if global_master_ingress == false and global_worker_ingress == false and is_master %}
-          # 两个都为false时，关闭ingress
-          disable: rke2-ingress-nginx
-          {% endif %}
+          {# 从全局变量获取基础配置 #}
+          {% set cni = global_cni %}
+          {% set data_dir = global_data_dir %}
+          {% set first_master = global_local_address %}
+          {% set node_hostname = ansible_facts['hostname'] %}
+          {% set master_ingress = global_master_ingress %}
+          {% set worker_ingress = global_worker_ingress %}
+          {% set rke2_master_config = global_rke2_master_config %}
+          {% set rke2_worker_config = global_rke2_worker_config %}
+          {% set vip_enable = global_master_vip_enable | default(false) %}
+          {% set vip_addr = global_master_vip | default('') %}
+          {# 决定集群 server 地址：若启用 VIP 则用 VIP，否则用第一个 master IP #}
+          {% set cluster_server = vip_addr if vip_enable else first_master %}
+
+          {# 基础配置字典 #}
+          {%- set config = {
+            'write-kubeconfig-mode': '0600',
+            'cni': cni,
+            'data-dir': data_dir,
+            'private-registry': '/etc/rancher/rke2/registries.yaml',
+            'node-name': node_hostname
+          } %}
+
+          {# 根据节点角色添加特定配置 #}
+          {%- if is_master %}
+            {# 所有 master 的 tls-san 基础列表 #}
+            {%- set tls_san_list = [first_master, node_hostname] %}
+            {%- if vip_enable and vip_addr %}
+              {%- set _ = tls_san_list.append(vip_addr) %}
+            {%- endif %}
+            {# 第一个 master #}
+            {%- if is_first_master %}
+              {%- set _ = config.update({
+                'tls-san': tls_san_list
+              }) %}
+            {%- else %}
+              {# 其他 master #}
+              {%- set _ = config.update({
+                'server': 'https://' + cluster_server + ':9345',
+                'tls-san': tls_san_list
+              }) %}
+            {%- endif %}
+            {# 合并 master 额外配置 #}
+            {%- for key, value in rke2_master_config.items() %}
+              {%- set _ = config.update({key: value}) %}
+            {%- endfor %}
+
+          {%- elif is_worker %}
+            {# worker 节点 #}
+            {%- set _ = config.update({
+              'server': 'https://' + cluster_server + ':9345',
+              'node-label': ['node-role=worker']
+            }) %}
+            {# 合并 worker 额外配置 #}
+            {%- for key, value in rke2_worker_config.items() %}
+              {%- set _ = config.update({key: value}) %}
+            {%- endfor %}
+          {%- endif %}
+
+          {# Ingress 禁用逻辑 #}
+          {%- if master_ingress == false and worker_ingress == false and is_master %}
+            {%- set _ = config.update({'disable': 'rke2-ingress-nginx'}) %}
+          {%- endif %}
+
+          {{ config | to_nice_yaml(indent=2) }}
         dest: "{{ rke2_config_dir }}/config.yaml"
         mode: 0600
-      
+
     - name: 验证生成的配置
       debug:
         msg: |
@@ -602,7 +635,10 @@
               Master: {{ global_master_ingress }} ({% if global_master_ingress == false %}已禁用{% else %}已启用{% endif %})
             {% elif is_worker %}
               Worker: {{ global_worker_ingress }} ({% if global_worker_ingress == false %}已禁用{% else %}已启用{% endif %})
-            {% endif %}"
+            {% endif %}
+          VIP启用: {{ global_master_vip_enable }} {% if global_master_vip_enable %}(VIP: {{ global_master_vip }}){% endif %}
+          Cluster Server地址: {{ global_master_vip if global_master_vip_enable else global_local_address }}
+      
 
 
 # ==================== 步骤4: 启动第一个master节点（local_address） ====================
@@ -785,6 +821,8 @@
     - name: 从local_address节点获取token
       delegate_to: "{{ first_master }}"
       run_once: yes
+      vars:
+        ansible_port: "{{ hostvars['localhost']['global_first_master_port'] }}"
       shell: cat {{ rke2_data_dir }}/server/node-token
       register: token_result
       ignore_errors: yes
@@ -804,7 +842,6 @@
         path: "{{ rke2_config_dir }}/config.yaml"
         block: |
           token: {{ token_from_master }}
-          server: https://{{ first_master }}:9345
         insertbefore: "^# Global settings"
         marker: "# {mark} ANSIBLE MANAGED BLOCK - TOKEN"
       when: 
@@ -816,7 +853,6 @@
         path: "{{ rke2_config_dir }}/config.yaml"
         block: |
           token: {{ token_from_master }}
-          server: https://{{ first_master }}:9345
         insertbefore: "^# Global settings"
         marker: "# {mark} ANSIBLE MANAGED BLOCK - TOKEN"
       when: 
