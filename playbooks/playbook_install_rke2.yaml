@@ -182,7 +182,7 @@
   
     - name: 复制rke2镜像文件到images目录
       copy:
-        src: "{{ rke2_artifacts_dir }}/rke2-images.linux-amd64.tar.zst"
+        src: "{{ rke2_artifacts_dir }}/rke2-images.linux-{{ artifacts_arch | trim }}.tar.zst"
         dest: "{{ rke2_images_dir }}/"
         remote_src: yes
         mode: "0644"
@@ -193,7 +193,7 @@
     
     - name: 复制calico镜像文件到images目录
       copy:
-        src: "{{ rke2_artifacts_dir }}/rke2-images-calico.linux-amd64.tar.zst"
+        src: "{{ rke2_artifacts_dir }}/rke2-images-calico.linux-{{ artifacts_arch | trim }}.tar.zst"
         dest: "{{ rke2_images_dir }}/"
         remote_src: yes
         mode: "0644"
