@@ -671,7 +671,7 @@
         cd {{ rke2_artifacts_dir }}
         export INSTALL_RKE2_ARTIFACT_PATH={{ rke2_artifacts_dir }}
         export INSTALL_RKE2_TYPE=server
-        export INSTALL_RKE2_ARCH=amd64
+        export INSTALL_RKE2_ARCH={{ global_master_arch | trim }}
         bash install.sh
       when: not rke2_installed.stat.exists
     
@@ -925,7 +925,7 @@
         cd {{ rke2_artifacts_dir }}
         export INSTALL_RKE2_ARTIFACT_PATH={{ rke2_artifacts_dir }}
         export INSTALL_RKE2_TYPE=server
-        export INSTALL_RKE2_ARCH=amd64
+        export INSTALL_RKE2_ARCH={{ global_master_arch | trim }}
         bash install.sh
       when: not rke2_installed.stat.exists
     
@@ -1061,7 +1061,7 @@
         cd {{ rke2_artifacts_dir }}
         export INSTALL_RKE2_ARTIFACT_PATH={{ rke2_artifacts_dir }}
         export INSTALL_RKE2_TYPE=agent
-        export INSTALL_RKE2_ARCH=amd64
+        export INSTALL_RKE2_ARCH={{ global_worker_arch | trim }}
         bash install.sh
       when: not rke2_installed.stat.exists
     
