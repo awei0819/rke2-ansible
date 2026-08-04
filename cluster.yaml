@@ -5,13 +5,14 @@ worker_arch: "amd64"
 # 本机IP,master1，必填
 local_address: 192.168.80.31
 
+# 主机配置，master默认没有污点，可用于工作负载，
 # master主机列表:ssh端口,master1需要写在第一个
 master:
   - 192.168.80.31:8022
   - 192.168.80.32:8022
   - 192.168.80.33:8022
 
-# worker主机列表:ssh端口，没有worker节点可以注释或删除
+# worker主机列表:ssh端口，有worker节点需取消注释
 #worker:
 #  - 192.168.80.34:8022
 
