@@ -83,7 +83,7 @@ docker.io/awei666666/ansible:20260226-amd64 /bin/bash
 # 进入容器
 docker exec -it install-rke2-ansible bash
 
-# 填写所有主机信息
+# 填写所有主机信息，仅用于初始化任务，安装k8s集群时使用./hosts/ansible-hosts 作为主机配置文件
 vi /etc/ansible/hosts
 [rke2]
 192.168.80.31
@@ -100,15 +100,11 @@ ansible_ssh_pass=your_password
 192.168.80.31 ansible_port=22 ansible_ssh_pass=password_31
 
 
-# 获取容器内公钥
-cat /root/.ssh/id_rsa.pub
+# 分发初始化脚本
+ansible rke2 -m copy -a "src=./init.sh dest=/root/init.sh"
 
-# 替换内容
-vi ./init.sh
-ssh_key="上一步获取的公钥内容"
-
-# 执行免密脚本
-ansible rke2 -m script -a "./init.sh"
+# 运行初始化脚本
+ansible rke2 -m shell -a "bash /root/init.sh"
 ```
 
 部署集群
