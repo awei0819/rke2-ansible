@@ -95,10 +95,10 @@ ansible_ssh_pass=your_password
 192.168.80.31 ansible_port=22 ansible_ssh_pass=password_31
 
 
-# 分发初始化脚本
+# 分发节点初始化脚本
 ansible rke2 -m copy -a "src=./init.sh dest=/root/init.sh"
 
-# 运行初始化脚本
+# 运行节点初始化脚本
 ansible rke2 -m shell -a "bash /root/init.sh"
 ```
 
