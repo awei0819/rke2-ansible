@@ -77,6 +77,8 @@ rke2_master_config:
   
   # etcd快照保留个数，默认12小时一个备份
   etcd-snapshot-retention: 10
+
+  # kubelet数据目录
   kubelet-arg:
     - "root-dir=/data/rke2/kubelet"
 
