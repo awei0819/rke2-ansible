@@ -113,6 +113,7 @@ ansible rke2 -m shell -a "bash /root/init.sh"
 ```
 #------------- 容器内操作 ------------
 # 配置 cluster.yaml 文件中有填写说明
+cd /data/install-rke2-ansible
 vi cluster.yaml
 
 # 执行部署，等待k8s集群安装完毕
