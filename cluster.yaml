@@ -3,17 +3,17 @@ master_arch: "amd64"
 worker_arch: "amd64"
 
 # 本机IP,master1，必填
-local_address: 192.168.80.32
+local_address: 192.168.80.31
 
 # master主机列表:ssh端口,master1需要写在第一个
 master:
   - 192.168.80.31:8022
-  - 192.168.80.32:8022
-  - 192.168.80.33:8022
+#  - 192.168.80.32:8022
+#  - 192.168.80.33:8022
 
 # worker主机列表:ssh端口，没有worker节点可以注释或删除
-worker:
-  - 192.168.80.34:8022
+#worker:
+#  - 192.168.80.34:8022
 
 # 全局数据目录,结尾必须为rke2
 data_dir: /data/rke2
@@ -71,12 +71,16 @@ rke2_master_config:
   cluster-cidr: 10.42.0.0/16
   # 用于 Service IP 的 IPv4/IPv6 网络 CIDR（默认值：10.43.0.0/16）
   service-cidr: 10.43.0.0/16
-  kube-apiserver-arg:
-    - "service-node-port-range=20000-65535"
+  # NodePort 端口范围（默认值：“30000-32767”）
+  service-node-port-range: 20000-32767
+  
   # etcd快照保留个数，默认12小时一个备份
   etcd-snapshot-retention: 10
-
+  kubelet-arg:
+    - "root-dir=/data/rke2/kubelet"
 
 rke2_worker_config:
   kube-proxy-arg:
     - "--metrics-bind-address=0.0.0.0:10249"
+  kubelet-arg:
+    - "root-dir=/data/rke2/kubelet"
