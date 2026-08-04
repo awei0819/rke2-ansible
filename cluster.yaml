@@ -36,11 +36,11 @@ registries:
       endpoint:
         - https://docker.mirrors.ustc.edu.cn
         - https://registry.aliyuncs.com
-    reg.test.com:
+    my.harbor.com:
       endpoint:
-        - https://reg.test.com
+        - https://my.harbor.com
   configs:
-    reg.test.com:
+    my.harbor.com:
       auth:
         username: "admin"
         password: "Hbqwer_1567_dsao32!"
