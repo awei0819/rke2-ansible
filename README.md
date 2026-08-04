@@ -63,6 +63,7 @@ Python 3.10.12
 
 ```
 # 拉取镜像
+# 离线包中的镜像存放位置：install-rke2-ansible/ansible-docker
 docker pull docker.io/awei666666/ansible:20260226-amd64
 或
 docker pull docker.io/awei666666/ansible:20260226-arm64
