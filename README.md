@@ -27,13 +27,13 @@ master1作为主控制节点、需安装docker服务。
 
 ## 部署RKE2-K8S集群 
 
-克隆仓库至数据目录
+克隆仓库至数据目录,离线部署包，这里跳过
 
 ```
 git clone https://github.com/awei0819/rke2-ansible.git  /data/install-rke2-ansible
 ```
 
-打包rke2安装包（此处需要网络）
+打包rke2安装包（此处需要网络）,离线部署包，这里跳过
 
 rke2版本参考：https://github.com/rancher/rke2/releases
 
@@ -50,6 +50,7 @@ bash download_rke2_artifacts.sh --arch arm64 --release v1.34.2+rke2r1
 ```
 
 启动ansible容器、避免ansible对宿主机python环境的依赖或版本冲突
+离线包，镜像在./ansible-docker目录
 
 若宿主机ansible可用，则可以不使用ansible容器
 ansible 2.10.8
@@ -72,8 +73,8 @@ docker run -itd --name install-rke2-ansible \
 docker.io/awei666666/ansible:20260226-amd64 /bin/bash
 ```
 
-免密
-后续添加新节点，仍需按先执行免密
+服务器初始化（优化内核、关闭防火墙、节点免密）
+后续添加新节点，需对新节点做初始化操作
 ```
 # 进入容器
 docker exec -it install-rke2-ansible bash
@@ -124,8 +125,25 @@ bash up-install.sh
 bash up-install.sh
 
 # 节点扩缩容
-# cluster.yaml中 增删节点信息，执行up脚本
+1、缩容
+# cluster.yaml中，删除节点IP信息，执行up脚本
 bash up-install.sh
+
+2、扩容
+vi /etc/ansible/hosts
+[rke2] 主机组中新增IP
+之后按[rke2]主机组格式，新增[new]主机组
+
+# 分发节点初始化脚本
+ansible new -m copy -a "src=./init.sh dest=/root/init.sh"
+
+# 运行节点初始化脚本
+ansible new -m shell -a "bash /root/init.sh"
+
+# cluster.yaml中,添加节点IP信息，执行up脚本
+bash up-install.sh
+
+
 
 # 集群清理/卸载 cluster.yaml中记录的所有节点
 bash up-install.sh reset
