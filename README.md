@@ -106,7 +106,8 @@ ansible_ssh_pass=your_password
 cat /root/.ssh/id_rsa.pub
 
 # 替换内容
-sed -i '2c\ssh_key="公钥内容"' ./ssh-copy.sh
+vi ./ssh-copy.sh
+ssh_key="上一步获取的公钥内容"
 
 # 执行免密脚本
 ansible ssh-copy -m script -a "./ssh-copy.sh"
