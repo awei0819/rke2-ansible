@@ -16,16 +16,14 @@ packages                # k8s镜像及rke2安装包存放目录，内有自动�
 cluster.yaml            # 核心配置文件，通过此文件来自动渲染生成rke2的配置文件/etc/rancher/rke2/config.yaml
 hosts/                  # 存放ansible-hosts文件（执行安装脚本自动生成）
 playbooks/              # 存放playbook文件（安装、初始化、卸载）
-ssh-copy.sh             # 免密脚本
+init.sh                 # 服务器初始化脚本
 up-install.sh           # 安装脚本
 README.md               # 说明文档
 ```
 
 ## 前置要求
+master1作为主控制节点、需安装docker服务。
 
-1、master1作为主控制节点、需安装docker服务。
-
-2、各k8s节点需做好前置初始化工作，关闭防火墙、swap分区等、以满足k8s部署要求。
 
 ## 部署RKE2-K8S集群 
 
@@ -87,12 +85,12 @@ docker exec -it install-rke2-ansible bash
 
 # 填写所有主机信息
 vi /etc/ansible/hosts
-[ssh-copy]
+[rke2]
 192.168.80.31
 192.168.80.32
 192.168.80.33
 192.168.80.34
-[ssh-copy:vars]
+[rke2:vars]
 ansible_port=22
 ansible_ssh_pass=your_password
 
@@ -106,11 +104,11 @@ ansible_ssh_pass=your_password
 cat /root/.ssh/id_rsa.pub
 
 # 替换内容
-vi ./ssh-copy.sh
+vi ./init.sh
 ssh_key="上一步获取的公钥内容"
 
 # 执行免密脚本
-ansible ssh-copy -m script -a "./ssh-copy.sh"
+ansible rke2 -m script -a "./init.sh"
 ```
 
 部署集群
