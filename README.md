@@ -49,17 +49,12 @@ bash download_rke2_artifacts.sh --arch arm64 --release v1.34.2+rke2r1
 执行后，会在packages目录下生成安装包
 ```
 
-启动ansible容器
+启动ansible容器、避免ansible对宿主机python环境的依赖或版本冲突
 
 若宿主机ansible可用，则可以不使用ansible容器
-
-使用ansible容器，避免ansible对宿主机python环境的依赖或版本冲突，满足版本需求的情况下，也可直接在宿主机执行后续操作（不使用ansible容器）
-
 ansible 2.10.8
-
 Python 3.10.12
-
-低于以上版本可自行尝试，或直接使用ansible容器部署，特别是麒麟系统
+低于以上版本可自行尝试，或直接使用ansible容器部署（推荐）
 
 ```
 # 拉取镜像
