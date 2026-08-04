@@ -29,7 +29,7 @@ calico_net: ens*
 master_ingress: true
 worker_ingress: false
 
-# 镜像仓库配置
+# 镜像仓库配置,还没有Harbor，有规划的域名可以提前配置，避免后续增加配置重启
 registries:
   mirrors:
     docker.io:
