@@ -1,5 +1,16 @@
 ---
-- name: 卸载RKE2集群
+# playbook_delete_node.yaml - RKE2 节点删除清理
+# 修复说明：
+# 1. 增加 service_facts（原版 ansible_facts.services 不存在，停止任务永远 skip；
+#    且 services 的 key 含 .service 后缀，原 regex_replace 是错的）
+# 2. 进程清理用 pkill -x 精确匹配，禁止 pkill -f rke2r1（脚本自身 cmdline
+#    含脚本全文，-f 模糊匹配会把执行脚本的 shell 杀掉导致任务中断）
+# 3. /proc 兜底扫描跳过自身($$)、父进程($PPID)、PID 1
+# 4. 挂载清理范围扩展到 /var/lib/rancher/rke2、/var/lib/kubelet、/run/k3s、
+#    /run/netns/cni-*（官方脚本不认识自定义 data-dir，这些是残留重灾区）
+# 5. 目录判断 -d 改为 -e（兼容 /var/log/pods 这类符号链接/悬空链接）
+# 6. 补充清理 /var/log/pods、/var/log/containers、/var/lib/cni、systemd .env
+- name: 卸载RKE2集群（删除节点清理）
   hosts: del-nodes
   vars_files:
     - ../cluster.yaml
@@ -7,19 +18,34 @@
     base_data_dir: /data
     rke2_data_dir: "{{ data_dir | default(base_data_dir ~ '/rke2') }}"
     rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
-  
+    # 挂载点/进程清理涉及的路径前缀
+    rke2_cleanup_prefixes:
+      - "{{ rke2_data_dir }}"
+      - /var/lib/rancher/rke2
+      - /var/lib/kubelet
+      - /run/k3s
+
   tasks:
-    - name: 检查是否正在运行RKE2服务
+    # ========== 1. 服务状态检查与停止 ==========
+    - name: 收集服务事实
+      service_facts:
+      failed_when: false
+
+    - name: 检查RKE2服务状态
       shell: |
-        systemctl is-active rke2-server.service 2>/dev/null || systemctl is-active rke2-agent.service 2>/dev/null || echo "not-running"
+        for svc in rke2-server.service rke2-agent.service; do
+          state=$(systemctl is-active "$svc" 2>/dev/null || echo "not-found")
+          echo "$svc: $state"
+        done
+      args:
+        executable: /bin/bash
       register: rke2_service_status
-      ignore_errors: yes
       changed_when: false
-    
+
     - name: 显示当前RKE2状态
       debug:
-        msg: "节点 {{ inventory_hostname }} - RKE2服务状态: {{ rke2_service_status.stdout }}"
-    
+        msg: "节点 {{ inventory_hostname }} - 服务状态: {{ rke2_service_status.stdout_lines }}"
+
     - name: 停止RKE2服务（如果正在运行）
       systemd:
         name: "{{ item }}"
@@ -29,77 +55,212 @@
       loop:
         - rke2-server.service
         - rke2-agent.service
-      # 服务存在性检查
-      when: 
-        - rke2_service_status.stdout != "not-running"
+      when:
+        - ansible_facts.services is defined
         - ansible_facts.services[item] is defined
+        - ansible_facts.services[item].state == "running"
       ignore_errors: yes
 
+    # ========== 2. 官方卸载脚本 ==========
     - name: 执行RKE2卸载脚本（killall）
       shell: |
         if [ -f /usr/local/bin/rke2-killall.sh ]; then
           /usr/local/bin/rke2-killall.sh
           echo "rke2-killall.sh 执行成功"
         else
-          echo "rke2-killall.sh 不存在"
+          echo "rke2-killall.sh 不存在，跳过"
         fi
       register: killall_result
-      ignore_errors: yes
-    
+      failed_when: false
+
     - name: 显示killall脚本执行结果
       debug:
-        msg: "节点 {{ inventory_hostname }} - killall脚本输出: {{ killall_result.stdout_lines | default([]) }}"
-    
+        msg: "节点 {{ inventory_hostname }} - {{ killall_result.stdout_lines | default([]) }}"
+
     - name: 执行RKE2卸载脚本（uninstall）
       shell: |
         if [ -f /usr/local/bin/rke2-uninstall.sh ]; then
           /usr/local/bin/rke2-uninstall.sh
           echo "rke2-uninstall.sh 执行成功"
         else
-          echo "rke2-uninstall.sh 不存在"
+          echo "rke2-uninstall.sh 不存在，跳过"
         fi
       register: uninstall_result
-      ignore_errors: yes
-    
+      failed_when: false
+
     - name: 显示uninstall脚本执行结果
       debug:
-        msg: "节点 {{ inventory_hostname }} - uninstall脚本输出: {{ uninstall_result.stdout_lines | default([]) }}"
+        msg: "节点 {{ inventory_hostname }} - {{ uninstall_result.stdout_lines | default([]) }}"
 
-
-    - name: 清理RKE2进程
+    # ========== 3. 清理残留进程 ==========
+    # 关键点：
+    # - 只用 pkill -x 按进程名精确匹配（comm 最长15字符，
+    #   containerd-shim-runc-v2 的 comm 就是 containerd-shim）
+    # - 绝不能用 pkill -f 模糊匹配，会匹配到执行本脚本的 shell 自身
+    - name: 清理RKE2残留进程（kube-proxy/kubelet/containerd-shim 等）
       shell: |
-        # 先检查是否有rke2相关进程，有则杀死，无则直接返回成功
-        if pgrep -f rke2r1 >/dev/null 2>&1; then
-          pkill -9 -f rke2r1
-          echo "已杀死所有rke2相关进程"
-        else
-          echo "未找到rke2r1相关进程，无需清理"
+        set +e
+        killed=0
+
+        # 3.1 按进程名精确清理
+        for proc in rke2 rke2-server rke2-agent kube-proxy kubelet containerd containerd-shim; do
+          if pgrep -x "$proc" >/dev/null 2>&1; then
+            pkill -9 -x "$proc"
+            echo "已杀死进程: $proc"
+            killed=1
+          fi
+        done
+
+        # 3.2 兜底：cmdline 仍引用 RKE2 路径的进程（跳过自身/父进程/PID1）
+        prefixes="{{ rke2_cleanup_prefixes | join(' ') }}"
+        my_pid=$$
+        parent_pid=$PPID
+        for pid in $(ls /proc | grep -E '^[0-9]+$' 2>/dev/null); do
+          [ "$pid" = "$my_pid" ] && continue
+          [ "$pid" = "$parent_pid" ] && continue
+          [ "$pid" = "1" ] && continue
+          cmdline="$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null || true)"
+          for p in $prefixes; do
+            case "$cmdline" in
+              "$p"|"$p"/*)
+                echo "杀掉引用 $p 的进程: PID=$pid, cmd=$cmdline"
+                kill -9 "$pid" 2>/dev/null || true
+                killed=1
+                ;;
+            esac
+          done
+        done
+
+        if [ "$killed" = "0" ]; then
+          echo "未发现RKE2相关残留进程"
         fi
+
+        sleep 2
+        exit 0
+      args:
+        executable: /bin/bash
       register: kill_process_result
-      changed_when: "'已杀死' in kill_process_result.stdout"
+      changed_when: "'已杀死' in kill_process_result.stdout or '杀掉' in kill_process_result.stdout"
       failed_when: false
-      ignore_errors: yes
-    
-    - name: 删除RKE2数据目录
-      file:
-        path: "{{ item }}"
-        state: absent
+
+    - name: 显示进程清理结果
+      debug:
+        msg: "节点 {{ inventory_hostname }} - 进程清理: {{ kill_process_result.stdout_lines | default([]) }}"
+
+    # ========== 4. 强制卸载挂载点 ==========
+    # 基于 /proc/mounts 收集所有 RKE2 相关挂载点（含自定义 data-dir 下
+    # kubelet pods 的 volume-subpaths bind mount），从深到浅依次懒卸载
+    - name: 强制卸载RKE2相关挂载点（从深到浅）
+      shell: |
+        set +e
+        prefixes="{{ rke2_cleanup_prefixes | join(' ') }}"
+        echo "== 目标前缀: $prefixes"
+
+        candidates=$(mktemp)
+        awk '{print $2}' /proc/mounts > "$candidates"
+        for ns in /run/netns/cni-*; do
+          [ -e "$ns" ] && echo "$ns" >> "$candidates"
+        done
+
+        mount_points=$(awk -v pl="$prefixes" '
+          BEGIN { n = split(pl, arr, " ") }
+          {
+            for (i = 1; i <= n; i++) {
+              p = arr[i]
+              if ($0 == p || index($0, p "/") == 1) { print length($0), $0; break }
+            }
+          }' "$candidates" | sort -rn | cut -d" " -f2-)
+        rm -f "$candidates"
+
+        if [ -z "$mount_points" ]; then
+          echo "未发现RKE2相关挂载点"
+        else
+          count=$(echo "$mount_points" | wc -l)
+          echo "发现 $count 个挂载点，从深到浅依次卸载:"
+          echo "$mount_points" | while read -r mp; do
+            [ -z "$mp" ] && continue
+            if umount -l "$mp" 2>/dev/null; then
+              echo "已卸载: $mp"
+            elif umount -l -f "$mp" 2>/dev/null; then
+              echo "强制卸载: $mp"
+            else
+              echo "卸载失败: $mp"
+            fi
+          done
+        fi
+
+        # 兜底：递归懒卸载
+        for p in $prefixes; do
+          umount -l -R "$p" 2>/dev/null || true
+        done
+        for ns in /run/netns/cni-*; do
+          [ -e "$ns" ] && umount -l "$ns" 2>/dev/null || true
+        done
+        exit 0
+      args:
+        executable: /bin/bash
+      register: umount_result
+      changed_when: "'已卸载' in umount_result.stdout or '强制卸载' in umount_result.stdout"
+      failed_when: false
+
+    - name: 显示挂载点卸载结果
+      debug:
+        msg: "节点 {{ inventory_hostname }} - 挂载点卸载详情: {{ umount_result.stdout_lines | default([]) }}"
+
+    # ========== 5. 删除目录（带重试） ==========
+    - name: 删除RKE2数据目录（带重试）
+      shell: |
+        target="{{ item }}"
+        for attempt in 1 2 3 4 5; do
+          rm -rf "$target" 2>/dev/null || true
+          if [ ! -e "$target" ]; then
+            echo "已删除: $target (第 $attempt 次尝试)"
+            exit 0
+          fi
+          echo "第 $attempt 次删除 $target 后仍存在，先卸载其下挂载点再重试..."
+          umount -l -R "$target" 2>/dev/null || true
+          sleep 2
+        done
+        echo "警告: $target 仍存在，可能有进程占用，请手动排查: lsof +D $target"
+        exit 0
       loop:
         - "{{ rke2_data_dir }}"
         - "{{ rke2_artifacts_dir }}"
-      ignore_errors: yes
-    
+        - /var/lib/rancher/rke2
+        - /var/lib/kubelet
+        - /run/k3s
+        - /var/lib/cni
+        - /var/log/pods
+        - /var/log/containers
+      args:
+        executable: /bin/bash
+      register: rm_data_result
+      changed_when: true
+      failed_when: false
+
+    - name: 显示数据目录删除结果
+      debug:
+        msg: "{{ item.stdout_lines | default([]) }}"
+      loop: "{{ rm_data_result.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    # ========== 6. 清理文件 ==========
     - name: 清理systemd服务文件
       file:
         path: "{{ item }}"
         state: absent
       loop:
         - /etc/systemd/system/rke2-server.service
+        - /etc/systemd/system/rke2-server.service.env
         - /etc/systemd/system/rke2-agent.service
+        - /etc/systemd/system/rke2-agent.service.env
+        - /usr/local/lib/systemd/system/rke2-server.service
+        - /usr/local/lib/systemd/system/rke2-agent.service
         - /usr/local/bin/rke2-killall.sh
         - /usr/local/bin/rke2-uninstall.sh
       ignore_errors: yes
-    
+
     - name: 清理残留文件
       file:
         path: "{{ item }}"
@@ -108,33 +269,51 @@
         - /usr/local/bin/rke2
         - /var/lib/rancher/rke2
         - /etc/rancher
-        - /var/lib/kubelet
         - /etc/cni
         - /opt/cni
         - /run/calico
+        - /run/flannel
+        - /run/netns
       ignore_errors: yes
-    
+
     - name: 刷新systemd
       systemd:
         daemon_reload: yes
-    
+      ignore_errors: yes
+
+    # ========== 7. 最终检查 ==========
     - name: 检查是否成功卸载
       shell: |
         echo "=== 卸载检查 ==="
         echo "服务状态:"
-        systemctl status rke2-server.service 2>/dev/null || echo "rke2-server.service: 不存在"
-        systemctl status rke2-agent.service 2>/dev/null || echo "rke2-agent.service: 不存在"
+        for svc in rke2-server.service rke2-agent.service; do
+          if [ -n "$(systemctl list-unit-files "$svc" --no-legend 2>/dev/null)" ]; then
+            echo "$svc: $(systemctl is-active "$svc" 2>/dev/null)"
+          else
+            echo "$svc: 不存在"
+          fi
+        done
         echo ""
         echo "文件检查:"
-        [ -d "{{ rke2_data_dir }}" ] && echo "数据目录 {{ rke2_data_dir }} 仍然存在" || echo "数据目录 {{ rke2_data_dir }} 已删除"
-        [ -d "{{ rke2_artifacts_dir }}" ] && echo "artifacts目录 {{ rke2_artifacts_dir }} 仍然存在" || echo "artifacts目录 {{ rke2_artifacts_dir }} 已删除"
-        # 移除了 rke2_config_dir 的检查行（核心修改）
+        [ -e "{{ rke2_data_dir }}" ] && echo "数据目录 {{ rke2_data_dir }} 仍然存在" || echo "数据目录 {{ rke2_data_dir }} 已删除"
+        [ -e "{{ rke2_artifacts_dir }}" ] && echo "artifacts目录 {{ rke2_artifacts_dir }} 仍然存在" || echo "artifacts目录 {{ rke2_artifacts_dir }} 已删除"
+        [ -e /var/lib/rancher/rke2 ] && echo "/var/lib/rancher/rke2 仍然存在" || echo "/var/lib/rancher/rke2 已删除"
+        [ -e /run/k3s ] && echo "/run/k3s 仍然存在" || echo "/run/k3s 已删除"
+        echo ""
+        echo "挂载点检查:"
+        if grep -E 'rke2|kubelet|/run/k3s|netns/cni' /proc/mounts; then
+          echo "!! 存在残留挂载点（见上方输出）"
+        else
+          echo "无残留挂载点"
+        fi
         echo ""
         echo "进程检查:"
-        ps aux | grep -E 'rke2|k3s' | grep -v grep || echo "未找到RKE2相关进程"
+        ps -eo pid=,args= | awk -v me="$$" '$1 != me' | grep -E 'rke2|kubelet|kube-proxy|containerd-shim' | grep -v grep || echo "未找到RKE2/kubelet/kube-proxy相关进程"
+      args:
+        executable: /bin/bash
       changed_when: false
-    
+      register: check_result
+
     - name: 显示卸载完成状态
       debug:
-        msg: |
-          节点 {{ inventory_hostname }} - RKE2卸载完成
+        msg: "{{ check_result.stdout_lines }}"
