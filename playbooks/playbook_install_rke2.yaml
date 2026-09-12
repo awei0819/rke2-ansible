@@ -9,32 +9,26 @@
   tasks:
     - name: 绑定全局变量到localhost（所有节点可通过hostvars访问）
       set_fact:
-        # 核心修改1：强化变量过滤（清理所有空白字符，不止首尾）
         global_master_arch: "{{ master_arch }}"
         global_worker_arch: "{{ worker_arch }}"
-        # 原始local_address本身无端口
         global_local_address: "{{ local_address }}"
-        # 处理master列表：去掉每个元素的":端口"部分，只保留IP
         global_master_list: "{{ master | map('regex_replace', ':.*', '') | list }}"
-        # 处理worker列表：去掉每个元素的":端口"部分，只保留IP（兼容空列表）
-        global_worker_list: "{{ worker | default([]) | map('regex_replace', ':.*', '') | list }}"
-        # 其他变量保持不变
+        # >>> FIX 11: None 也走 default
+        global_worker_list: "{{ worker | default([], true) | map('regex_replace', ':.*', '') | list }}"
         global_data_dir: "{{ data_dir }}"
         global_cni: "{{ cni }}"
         global_master_ingress: "{{ master_ingress }}"
         global_worker_ingress: "{{ worker_ingress }}"
         global_registries: "{{ registries }}"
-        # 用dirname过滤器提取data_dir中rke2前面的路径
         base_data_dir: "{{ data_dir | dirname }}"
-        # 新增：RKE2 自定义配置（从 cluster.yaml 读取，缺省为空字典）
         global_rke2_master_config: "{{ rke2_master_config | default({}) }}"
         global_rke2_worker_config: "{{ rke2_worker_config | default({}) }}"
-        # 新增 VIP 配置
         global_master_vip_enable: "{{ master_vip.enable | default(false) }}"
         global_master_vip: "{{ master_vip.vip | default('') }}"
-        # 新增第一个 master 的 SSH 端口（用于 token 获取）
-        global_first_master_port: "{{ master[0].split(':')[1] | default(22) }}"
-    
+        # >>> FIX 10: 用 Jinja 三元，避免 split(':')[1] 越界
+        global_first_master_port: >-
+          {{ (master[0].split(':')[1]) if ':' in master[0] else 22 }}
+
 # ========== 前置验证（只在localhost执行） ==========
     - name: 验证cluster.yaml配置
       fail:
@@ -45,14 +39,14 @@
       fail:
         msg: "cluster.yaml中必须配置local_address！当前值：{{ global_local_address | default('未定义') }}"
       when: global_local_address is not defined or global_local_address == ""
-    
+
     - name: 验证local_address在master列表中
       fail:
         msg: |
           错误：local_address ({{ global_local_address }}) 不在master节点列表中！
           master节点列表: {{ global_master_list }}
       when: global_local_address not in global_master_list
-    
+
     - name: 显示验证通过信息
       debug:
         msg: |
@@ -90,7 +84,7 @@
         global_master_vip_enable: "{{ hostvars['localhost']['global_master_vip_enable'] }}"
         global_master_vip: "{{ hostvars['localhost']['global_master_vip'] }}"
         global_first_master_port: "{{ hostvars['localhost']['global_first_master_port'] }}"
-    
+
     - name: 验证变量已同步
       debug:
         msg: |
@@ -103,16 +97,14 @@
           - VIP启用: {{ global_master_vip_enable }}
 
 
-# ==================== 步骤1: 准备目录和解压安装包（复用全局变量） ====================
+# ==================== 步骤1: 准备目录和解压安装包 ====================
 - name: 步骤1 - 准备目录和解压安装包
   hosts: rke2
   vars:
-    # 从全局变量读取，避免重复定义
     rke2_config_dir: /etc/rancher/rke2
     rke2_data_dir: "{{ global_data_dir }}"
     rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
     rke2_images_dir: "{{ rke2_data_dir }}/agent/images"
-    # 架构变量，- 会清理变量中的空白和换行符
     artifacts_arch: >-
       {% if 'rke2-masters' in group_names -%}
         {{ global_master_arch }}
@@ -121,26 +113,24 @@
       {%- else -%}
         amd64
       {%- endif %}
-    packages_abs_dir: "../packages"
+    # >>> FIX 3: 用 playbook_dir 定位 packages 目录
+    packages_abs_dir: "{{ playbook_dir }}/../packages"
 
   tasks:
-    # 在控制节点查找匹配的安装包（解决通配符问题）
     - name: 在控制节点查找RKE2安装包
       find:
         path: "{{ packages_abs_dir }}"
-        patterns: "rke2-artifacts-{{ artifacts_arch | trim }}*.tgz"  # 匹配架构开头的tgz包
+        patterns: "rke2-artifacts-{{ artifacts_arch | trim }}*.tgz"
         file_type: file
         use_regex: no
       register: found_tarballs
-      delegate_to: localhost  # 安装包在控制节点，本地查找
-      failed_when: found_tarballs.matched == 0  # 没找到文件直接报错，提示用户
+      delegate_to: localhost
+      failed_when: found_tarballs.matched == 0
 
-    # 新增：设置实际的安装包绝对路径
     - name: 设置安装包绝对路径
       set_fact:
         real_tarball_path: "{{ found_tarballs.files[0].path }}"
 
-    # 新增：调试打印关键信息（便于排查）
     - name: 调试 - 打印安装包匹配结果
       debug:
         msg:
@@ -161,25 +151,24 @@
         - "{{ rke2_data_dir }}"
         - "{{ rke2_artifacts_dir }}"
         - "{{ rke2_images_dir }}"
-  
+
     - name: 检查artifacts是否已存在
       stat:
         path: "{{ rke2_artifacts_dir }}/install.sh"
       register: artifact_check
-  
+
     - name: 显示当前状态
       debug:
         msg: "节点 {{ inventory_hostname }} - Artifacts存在: {{ artifact_check.stat.exists }}"
-  
-    # 使用实际找到的绝对路径解压
+
     - name: 解压artifacts到 {{ base_data_dir }}
       unarchive:
-        src: "{{ real_tarball_path }}"  # 用find找到的具体路径
+        src: "{{ real_tarball_path }}"
         dest: "{{ base_data_dir }}"
         remote_src: no
         creates: "{{ rke2_artifacts_dir }}/install.sh"
       when: not artifact_check.stat.exists
-  
+
     - name: 复制rke2镜像文件到images目录
       copy:
         src: "{{ rke2_artifacts_dir }}/rke2-images.linux-{{ artifacts_arch | trim }}.tar.zst"
@@ -189,8 +178,8 @@
         owner: root
         group: root
         backup: yes
-      ignore_errors: yes  # 兼容不同版本包名差异
-    
+      ignore_errors: yes
+
     - name: 复制calico镜像文件到images目录
       copy:
         src: "{{ rke2_artifacts_dir }}/rke2-images-calico.linux-{{ artifacts_arch | trim }}.tar.zst"
@@ -200,8 +189,8 @@
         owner: root
         group: root
         backup: yes
-      ignore_errors: yes  # 兼容不同版本包名差异
-  
+      ignore_errors: yes
+
     - name: 验证结果
       shell: |
         echo "=== 节点: {{ inventory_hostname }} ==="
@@ -216,10 +205,11 @@
         ls -lh "{{ rke2_artifacts_dir }}/" | grep calico || echo "无Calico镜像文件"
       register: verify_result
       changed_when: false
-  
+
     - name: 显示验证结果
       debug:
         msg: "{{ verify_result.stdout_lines }}"
+
 
 # ==================== 步骤2: 为local_address节点准备证书 ====================
 - name: 步骤2 - 使用原始脚本生成RKE2证书
@@ -227,22 +217,22 @@
   gather_facts: yes
   vars:
     rke2_data_dir: "{{ hostvars['localhost']['global_data_dir'] }}"
-  
+
   tasks:
     - name: 检查当前节点是否是 local_address
       set_fact:
-        is_local_address: "{{ ansible_facts['default_ipv4']['address'] == hostvars['localhost']['global_local_address'] or inventory_hostname == hostvars['localhost']['global_local_address'] }}"
-    
+        is_local_address: "{{ inventory_hostname == hostvars['localhost']['global_local_address'] }}"
+
     - name: 如果不是local_address则跳过
       meta: end_host
       when: not is_local_address
-    
+
     - name: 执行原始脚本生成证书
       shell: |
-        set -e  # 脚本执行出错时立即退出，避免后续无效操作
+        set -e
 
         ###########################################################################
-        # 1. 配置 RKE2 证书有效期环境变量（仅首次配置，已存在则跳过）
+        # 1. 配置 RKE2 证书有效期环境变量
         ###########################################################################
         ENV_FILE="/etc/default/rke2-server"
         ENV_KEY="CATTLE_NEW_SIGNED_CERT_EXPIRATION_DAYS"
@@ -253,7 +243,6 @@
             echo "$ENV_KEY=$ENV_VALUE" > "$ENV_FILE"
         elif ! grep -q "^$ENV_KEY=$ENV_VALUE" "$ENV_FILE"; then
             echo "=== 更新 RKE2 环境变量：$ENV_KEY 为 $ENV_VALUE ==="
-            # 先删除旧配置（若存在），再添加新配置
             sed -i "/^$ENV_KEY=/d" "$ENV_FILE"
             echo "$ENV_KEY=$ENV_VALUE" >> "$ENV_FILE"
         else
@@ -261,7 +250,7 @@
         fi
 
         ###########################################################################
-        # 2. 创建证书目录（与 RKE2 数据目录对应，已存在则跳过）
+        # 2. 创建证书目录
         ###########################################################################
         DATA_DIR="{{ rke2_data_dir }}"
         CERT_DIR="$DATA_DIR/server/tls"
@@ -270,19 +259,17 @@
         if [ ! -d "$ETCD_CERT_DIR" ]; then
             echo "=== 创建证书目录：$ETCD_CERT_DIR ==="
             mkdir -p "$ETCD_CERT_DIR"
-            chmod -R 700 "$CERT_DIR"  # 目录权限：仅所有者可读写执行
+            chmod -R 700 "$CERT_DIR"
             echo "=== 证书目录权限设置完成 ==="
         else
             echo "=== 证书目录 $ETCD_CERT_DIR 已存在，跳过 ==="
         fi
 
-        # 创建临时 OpenSSL V3 CA 扩展配置（解决 V1 证书缺少 CA:TRUE 的问题）
         printf '[v3_ca]\nbasicConstraints = critical, CA:TRUE\nkeyUsage = critical, keyCertSign, cRLSign\nsubjectKeyIdentifier = hash\nauthorityKeyIdentifier = keyid:always, issuer\n' > /tmp/openssl-v3ca.cnf
 
         ###########################################################################
-        # 3. 自签根 CA 证书（服务器端）：已存在则跳过
+        # 3. 自签根 CA 证书（服务器端）
         ###########################################################################
-        # 服务器 CA 私钥/证书路径
         SERVER_CA_KEY="$CERT_DIR/server-ca.key"
         SERVER_CA_CSR="$CERT_DIR/server-ca.csr"
         SERVER_CA_CRT="$CERT_DIR/server-ca.crt"
@@ -291,21 +278,18 @@
         if [ ! -f "$SERVER_CA_CRT" ]; then
             echo "=== 生成服务器 CA 私钥（2048位）==="
             openssl genrsa -out "$SERVER_CA_KEY" 2048
-            chmod 600 "$SERVER_CA_KEY"  # 私钥权限：仅所有者可读写
-
+            chmod 600 "$SERVER_CA_KEY"
             echo "=== 生成服务器 CA 证书请求（CSR）==="
             openssl req -new -key "$SERVER_CA_KEY" \
                 -out "$SERVER_CA_CSR" \
                 -subj "/C=CN/ST=Beijing/L=Beijing/O=RKE2/OU=CA/CN=RKE2 Server CA"
-
             echo "=== 自签服务器 CA 证书（有效期 100 年）==="
             openssl x509 -req -days 36500 \
                 -in "$SERVER_CA_CSR" \
                 -signkey "$SERVER_CA_KEY" \
                 -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$SERVER_CA_CRT"
-            chmod 644 "$SERVER_CA_CRT"  # 证书权限：所有者可读写，其他用户可读
-
+            chmod 644 "$SERVER_CA_CRT"
             echo "=== 生成服务器 CA 无链证书（RKE2 要求）==="
             cp "$SERVER_CA_CRT" "$SERVER_CA_NOCHAIN"
             chmod 644 "$SERVER_CA_NOCHAIN"
@@ -315,9 +299,8 @@
         fi
 
         ###########################################################################
-        # 4. 自签客户端 CA 证书：已存在则跳过
+        # 4. 自签客户端 CA 证书
         ###########################################################################
-        # 客户端 CA 私钥/证书路径
         CLIENT_CA_KEY="$CERT_DIR/client-ca.key"
         CLIENT_CA_CSR="$CERT_DIR/client-ca.csr"
         CLIENT_CA_CRT="$CERT_DIR/client-ca.crt"
@@ -327,12 +310,10 @@
             echo "=== 生成客户端 CA 私钥（2048位）==="
             openssl genrsa -out "$CLIENT_CA_KEY" 2048
             chmod 600 "$CLIENT_CA_KEY"
-
             echo "=== 生成客户端 CA 证书请求（CSR）==="
             openssl req -new -key "$CLIENT_CA_KEY" \
                 -out "$CLIENT_CA_CSR" \
                 -subj "/C=CN/ST=Beijing/L=Beijing/O=RKE2/OU=CA/CN=RKE2 Client CA"
-
             echo "=== 自签客户端 CA 证书（有效期 100 年）==="
             openssl x509 -req -days 36500 \
                 -in "$CLIENT_CA_CSR" \
@@ -340,7 +321,6 @@
                 -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$CLIENT_CA_CRT"
             chmod 644 "$CLIENT_CA_CRT"
-
             echo "=== 生成客户端 CA 无链证书（RKE2 要求）==="
             cp "$CLIENT_CA_CRT" "$CLIENT_CA_NOCHAIN"
             chmod 644 "$CLIENT_CA_NOCHAIN"
@@ -350,9 +330,8 @@
         fi
 
         ###########################################################################
-        # 5. 自签 etcd 相关 CA 证书：已存在则跳过
+        # 5. 自签 etcd 相关 CA 证书
         ###########################################################################
-        # 5.1 etcd 服务器 CA
         ETCD_SERVER_KEY="$ETCD_CERT_DIR/server-ca.key"
         ETCD_SERVER_CSR="$ETCD_CERT_DIR/server-ca.csr"
         ETCD_SERVER_CRT="$ETCD_CERT_DIR/server-ca.crt"
@@ -361,12 +340,10 @@
             echo "=== 生成 etcd 服务器 CA 私钥（2048位）==="
             openssl genrsa -out "$ETCD_SERVER_KEY" 2048
             chmod 600 "$ETCD_SERVER_KEY"
-
             echo "=== 生成 etcd 服务器 CA 证书请求（CSR）==="
             openssl req -new -key "$ETCD_SERVER_KEY" \
                 -out "$ETCD_SERVER_CSR" \
                 -subj "/C=CN/ST=Beijing/L=Beijing/O=RKE2/OU=etcd/CN=etcd Server CA"
-
             echo "=== 自签 etcd 服务器 CA 证书（有效期 100 年）==="
             openssl x509 -req -days 36500 \
                 -in "$ETCD_SERVER_CSR" \
@@ -379,7 +356,6 @@
             echo "=== etcd 服务器 CA 证书 $ETCD_SERVER_CRT 已存在，跳过 ==="
         fi
 
-        # 5.2 etcd 节点间通信 CA
         ETCD_PEER_KEY="$ETCD_CERT_DIR/peer-ca.key"
         ETCD_PEER_CSR="$ETCD_CERT_DIR/peer-ca.csr"
         ETCD_PEER_CRT="$ETCD_CERT_DIR/peer-ca.crt"
@@ -388,12 +364,10 @@
             echo "=== 生成 etcd 节点通信 CA 私钥（2048位）==="
             openssl genrsa -out "$ETCD_PEER_KEY" 2048
             chmod 600 "$ETCD_PEER_KEY"
-
             echo "=== 生成 etcd 节点通信 CA 证书请求（CSR）==="
             openssl req -new -key "$ETCD_PEER_KEY" \
                 -out "$ETCD_PEER_CSR" \
                 -subj "/C=CN/ST=Beijing/L=Beijing/O=RKE2/OU=etcd/CN=etcd Peer CA"
-
             echo "=== 自签 etcd 节点通信 CA 证书（有效期 100 年）==="
             openssl x509 -req -days 36500 \
                 -in "$ETCD_PEER_CSR" \
@@ -407,7 +381,7 @@
         fi
 
         ###########################################################################
-        # 6. 生成 request-header CA 证书：已存在则跳过
+        # 6. 生成 request-header CA 证书
         ###########################################################################
         REQ_HEADER_KEY="$CERT_DIR/request-header-ca.key"
         REQ_HEADER_CSR="$CERT_DIR/request-header-ca.csr"
@@ -416,19 +390,16 @@
         if [ ! -f "$REQ_HEADER_CRT" ]; then
             echo "=== 生成 request-header CA 私钥（2048位）==="
             openssl genrsa -out "$REQ_HEADER_KEY" 2048
-
             echo "=== 生成 request-header CA 证书请求（CSR）==="
             openssl req -new -key "$REQ_HEADER_KEY" \
                 -out "$REQ_HEADER_CSR" \
                 -subj "/C=CN/ST=Beijing/L=Beijing/O=RKE2/OU=CA/CN=RKE2 Request-Header CA"
-
             echo "=== 自签 request-header CA 证书（有效期 100 年）==="
             openssl x509 -req -days 36500 \
                 -in "$REQ_HEADER_CSR" \
                 -signkey "$REQ_HEADER_KEY" \
                 -extfile /tmp/openssl-v3ca.cnf -extensions v3_ca \
                 -out "$REQ_HEADER_CRT"
-
             echo "=== 设置 request-header CA 权限（私钥 600，证书 644）==="
             chmod 600 "$REQ_HEADER_KEY"
             chmod 644 "$REQ_HEADER_CRT"
@@ -438,7 +409,7 @@
         fi
 
         ###########################################################################
-        # 最终验证：检查关键证书是否齐全
+        # 最终验证
         ###########################################################################
         echo -e "\n=== 关键证书文件检查 ==="
         KEY_FILES=("$SERVER_CA_KEY" "$CLIENT_CA_KEY" "$ETCD_SERVER_KEY" "$ETCD_PEER_KEY" "$REQ_HEADER_KEY")
@@ -466,12 +437,12 @@
             echo -e "\n=== 证书文件：$cert ==="
             openssl x509 -in "$cert" -noout -dates
         done
-        
+
         echo -e "\n=== 脚本执行完成 ==="
       args:
         executable: /bin/bash
       register: cert_gen_result
-    
+
     - name: 显示证书生成结果
       debug:
         msg: |
@@ -496,14 +467,14 @@
     rke2_config_dir: /etc/rancher/rke2
     rke2_data_dir: "{{ global_data_dir }}"
     first_master: "{{ global_local_address }}"
-  
+
   tasks:
     - name: 创建RKE2配置目录
       file:
         path: "{{ rke2_config_dir }}"
         state: directory
         mode: 0755
-      
+
     - name: 为所有节点生成registries.yaml
       copy:
         content: |
@@ -516,7 +487,7 @@
                 - {{ endpoint }}
           {% endfor %}
           {% endfor %}
- 
+
           configs:
           {% for registry, config in global_registries.configs.items() %}
             {{ registry }}:
@@ -531,17 +502,17 @@
           {% endif %}
         dest: "{{ rke2_config_dir }}/registries.yaml"
         mode: 0640
-      
+
     - name: 从facts获取实际主机名
       set_fact:
         node_hostname: "{{ ansible_facts['hostname'] }}"
-    
+
     - name: 判断节点类型（通过主机组）
       set_fact:
         is_first_master: "{{ inventory_hostname == first_master }}"
         is_master: "{{ 'rke2-masters' in group_names }}"
         is_worker: "{{ 'rke2-workers' in group_names }}"
-    
+
     - name: 显示节点类型判断结果
       debug:
         msg: |
@@ -550,8 +521,8 @@
           主机名: {{ node_hostname }}
           是否第一个master: {{ is_first_master }}
           是否master节点: {{ is_master }}
-          是否worker节点: {{ is_worker }}"
-    
+          是否worker节点: {{ is_worker }}
+
     - name: 为每个节点生成config.yaml (不含token，等待master1生成)
       copy:
         content: |
@@ -566,10 +537,8 @@
           {% set rke2_worker_config = global_rke2_worker_config %}
           {% set vip_enable = global_master_vip_enable | default(false) %}
           {% set vip_addr = global_master_vip | default('') %}
-          {# 决定集群 server 地址：若启用 VIP 则用 VIP，否则用第一个 master IP #}
           {% set cluster_server = vip_addr if vip_enable else first_master %}
 
-          {# 基础配置字典 #}
           {%- set config = {
             'write-kubeconfig-mode': '0600',
             'cni': cni,
@@ -578,43 +547,35 @@
             'node-name': node_hostname
           } %}
 
-          {# 根据节点角色添加特定配置 #}
           {%- if is_master %}
-            {# 所有 master 的 tls-san 基础列表 #}
             {%- set tls_san_list = [first_master, node_hostname] %}
             {%- if vip_enable and vip_addr %}
               {%- set _ = tls_san_list.append(vip_addr) %}
             {%- endif %}
-            {# 第一个 master #}
             {%- if is_first_master %}
               {%- set _ = config.update({
                 'tls-san': tls_san_list
               }) %}
             {%- else %}
-              {# 其他 master #}
               {%- set _ = config.update({
                 'server': 'https://' + cluster_server + ':9345',
                 'tls-san': tls_san_list
               }) %}
             {%- endif %}
-            {# 合并 master 额外配置 #}
             {%- for key, value in rke2_master_config.items() %}
               {%- set _ = config.update({key: value}) %}
             {%- endfor %}
 
           {%- elif is_worker %}
-            {# worker 节点 #}
             {%- set _ = config.update({
               'server': 'https://' + cluster_server + ':9345',
               'node-label': ['node-role=worker']
             }) %}
-            {# 合并 worker 额外配置 #}
             {%- for key, value in rke2_worker_config.items() %}
               {%- set _ = config.update({key: value}) %}
             {%- endfor %}
           {%- endif %}
 
-          {# Ingress 禁用逻辑 #}
           {%- if master_ingress == false and worker_ingress == false and is_master %}
             {%- set _ = config.update({'disable': 'rke2-ingress-nginx'}) %}
           {%- endif %}
@@ -630,7 +591,7 @@
           实际主机名: {{ node_hostname }}
           节点类型: {% if is_master %}Master{% elif is_worker %}Worker{% else %}Unknown{% endif %}
           是否是第一个master: {{ is_first_master }}
-          Ingress状态: 
+          Ingress状态:
             {% if is_master %}
               Master: {{ global_master_ingress }} ({% if global_master_ingress == false %}已禁用{% else %}已启用{% endif %})
             {% elif is_worker %}
@@ -638,10 +599,9 @@
             {% endif %}
           VIP启用: {{ global_master_vip_enable }} {% if global_master_vip_enable %}(VIP: {{ global_master_vip }}){% endif %}
           Cluster Server地址: {{ global_master_vip if global_master_vip_enable else global_local_address }}
-      
 
 
-# ==================== 步骤4: 启动第一个master节点（local_address） ====================
+# ==================== 步骤4: 启动第一个master节点 ====================
 - name: 步骤4 - 启动第一个master节点（local_address）
   hosts: rke2-masters
   vars:
@@ -649,21 +609,21 @@
     rke2_data_dir: "{{ global_data_dir }}"
     rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
     first_master: "{{ global_local_address }}"
-  
+
   pre_tasks:
     - name: 检查当前节点是否是 local_address
       set_fact:
         is_local_address: "{{ inventory_hostname == global_local_address }}"
-    
+
     - name: 如果不是local_address则跳过整个play
       meta: end_host
       when: not is_local_address
-  
-  tasks:
 
+  tasks:
+    # >>> FIX 15: rke2 二进制在 /usr/local/bin/rke2
     - name: 检查RKE2是否已安装
       stat:
-        path: "{{ rke2_data_dir }}/bin/rke2"
+        path: /usr/local/bin/rke2
       register: rke2_installed
 
     - name: 安装第一个master节点
@@ -674,7 +634,7 @@
         export INSTALL_RKE2_ARCH={{ global_master_arch | trim }}
         bash install.sh
       when: not rke2_installed.stat.exists
-    
+
     - name: 启用并启动rke2-server服务(请等待)
       systemd:
         name: rke2-server
@@ -684,12 +644,11 @@
       register: start_result
       retries: 30
       delay: 20
-      until: 
+      # >>> FIX 14: 加默认值兜底
+      until:
         - start_result is succeeded
-        - start_result.status.ActiveState is defined
-        - start_result.status.ActiveState == "active"
+        - (start_result.status | default({})).ActiveState | default('') == "active"
 
-    # ========== 修复 ExecStopPost：解决 restart 时 etcd 端口冲突 ==========
     - name: 修复 rke2-server ExecStopPost（解决 etcd 端口冲突问题）
       lineinfile:
         path: /usr/local/lib/systemd/system/rke2-server.service
@@ -705,18 +664,17 @@
 
     - name: 检查服务状态
       debug:
-        msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
-    
+        msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ (start_result.status | default({})).ActiveState | default('unknown') }}"
+
     - name: 等待RKE2完全启动
       shell: |
         timeout 120 bash -c 'until {{ rke2_data_dir }}/bin/kubectl --kubeconfig {{ rke2_config_dir }}/rke2.yaml get nodes 2>/dev/null; do sleep 2; done'
       register: wait_result
       failed_when: false
       changed_when: false
-    
+
     - name: 配置环境变量
       block:
-        # 复制kubectl到/usr/bin
         - name: 复制kubectl
           copy:
             src: "{{ rke2_data_dir }}/bin/kubectl"
@@ -724,14 +682,12 @@
             remote_src: yes
             owner: root
             group: root
-        
+
         - name: 给kubectl添加执行权限
-          shell: |
-            chmod +x /usr/bin/kubectl
+          shell: chmod +x /usr/bin/kubectl
           args:
             executable: /bin/bash
-        
-        # 创建.kube目录（如果不存在）
+
         - name: 创建.kube目录
           file:
             path: /root/.kube
@@ -739,8 +695,7 @@
             mode: 0700
             owner: root
             group: root
-        
-        # 复制kubeconfig
+
         - name: 复制kubeconfig
           copy:
             src: "{{ rke2_config_dir }}/rke2.yaml"
@@ -749,26 +704,25 @@
             mode: 0600
             owner: root
             group: root
-        
-        # 环境变量配置
-        - name: 创建rke2.sh环境变量文件（可选，用于其他用户）
+
+        - name: 创建rke2.sh环境变量文件
           copy:
             dest: /etc/profile.d/rke2.sh
             content: |
               export PATH=$PATH:{{ rke2_data_dir }}/bin
             mode: 0644
-        
-        - name: 配置ctr命令和crictl
+
+        - name: 配置ctr命令
           lineinfile:
             path: /etc/profile
             line: 'alias ctr="{{ rke2_data_dir }}/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io"'
-        
+
         - name: 配置CRI_CONFIG_FILE
           lineinfile:
             path: /etc/profile
             line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
-        
-        - name: 清理可能存在的旧文件（避免软链创建失败）
+
+        - name: 清理可能存在的旧文件
           file:
             path: /run/containerd/containerd.sock
             state: absent
@@ -789,7 +743,7 @@
         - name: 显示软链接状态
           debug:
             msg: "{{ symlink_check.stdout_lines }}"
-    
+
     - name: 显示master1安装完成信息
       debug:
         msg: |
@@ -807,16 +761,16 @@
     rke2_config_dir: /etc/rancher/rke2
     rke2_data_dir: "{{ global_data_dir }}"
     first_master: "{{ global_local_address }}"
-  
+
   pre_tasks:
     - name: 检查当前节点是否是local_address
       set_fact:
         is_local_address: "{{ inventory_hostname == global_local_address }}"
-    
+
     - name: 如果是local_address则跳过整个play
       meta: end_host
       when: is_local_address
-  
+
   tasks:
     - name: 从local_address节点获取token
       delegate_to: "{{ first_master }}"
@@ -826,17 +780,24 @@
       shell: cat {{ rke2_data_dir }}/server/node-token
       register: token_result
       ignore_errors: yes
-    
+
     - name: 设置token为变量
       set_fact:
         token_from_master: "{{ token_result.stdout | default('') }}"
       run_once: yes
-    
-    - name: 验证token是否获取到
-      debug:
-        msg: "从local_address节点获取的token: {{ token_from_master | default('未获取到') }}"
+
+    # >>> FIX 13: token 获取失败时直接 fail，避免后续静默跳过
+    - name: 校验 token 是否获取成功
+      fail:
+        msg: "未能从 {{ first_master }} 获取 node-token，请检查第一个 master 是否已正常启动"
+      when: token_from_master | length == 0
       run_once: yes
-    
+
+    - name: 验证token是否获取到（脱敏）
+      debug:
+        msg: "从local_address节点获取的token长度: {{ token_from_master | length }}"
+      run_once: yes
+
     - name: 更新配置文件添加token（master节点）
       blockinfile:
         path: "{{ rke2_config_dir }}/config.yaml"
@@ -844,10 +805,10 @@
           token: {{ token_from_master }}
         insertbefore: "^# Global settings"
         marker: "# {mark} ANSIBLE MANAGED BLOCK - TOKEN"
-      when: 
+      when:
         - token_from_master | length > 0
         - inventory_hostname in global_master_list
-    
+
     - name: 更新配置文件添加token（worker节点）
       blockinfile:
         path: "{{ rke2_config_dir }}/config.yaml"
@@ -855,16 +816,16 @@
           token: {{ token_from_master }}
         insertbefore: "^# Global settings"
         marker: "# {mark} ANSIBLE MANAGED BLOCK - TOKEN"
-      when: 
+      when:
         - token_from_master | length > 0
         - inventory_hostname in global_worker_list
-    
+
     - name: 显示更新后的配置
       shell: head -10 {{ rke2_config_dir }}/config.yaml
       register: config_check
       changed_when: false
       when: token_from_master | length > 0
-    
+
     - name: 显示配置前几行
       debug:
         msg: "{{ config_check.stdout_lines }}"
@@ -879,29 +840,26 @@
     rke2_data_dir: "{{ global_data_dir }}"
     rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
     first_master: "{{ global_local_address }}"
-  
+
   pre_tasks:
     - name: 检查当前节点是否是local_address
       set_fact:
         is_local_address: "{{ inventory_hostname == global_local_address }}"
-    
+
     - name: 如果是local_address则跳过整个play
       meta: end_host
       when: is_local_address
-  
+
   tasks:
+    # >>> FIX 15: 用 /usr/local/bin/rke2 判断
     - name: 检查RKE2是否已安装
       stat:
-        path: "{{ rke2_data_dir }}/bin/rke2"
+        path: /usr/local/bin/rke2
       register: rke2_installed
-    
+
     - name: 配置 RKE2 证书有效期环境变量
       shell: |
-        set -e  # 脚本执行出错时立即退出，避免后续无效操作
-
-        ###########################################################################
-        #  配置 RKE2 证书有效期环境变量（仅首次配置，已存在则跳过）
-        ###########################################################################
+        set -e
         ENV_FILE="/etc/default/rke2-server"
         ENV_KEY="CATTLE_NEW_SIGNED_CERT_EXPIRATION_DAYS"
         ENV_VALUE="36500"
@@ -911,7 +869,6 @@
             echo "$ENV_KEY=$ENV_VALUE" > "$ENV_FILE"
         elif ! grep -q "^$ENV_KEY=$ENV_VALUE" "$ENV_FILE"; then
             echo "=== 更新 RKE2 环境变量：$ENV_KEY 为 $ENV_VALUE ==="
-            # 先删除旧配置（若存在），再添加新配置
             sed -i "/^$ENV_KEY=/d" "$ENV_FILE"
             echo "$ENV_KEY=$ENV_VALUE" >> "$ENV_FILE"
         else
@@ -928,7 +885,7 @@
         export INSTALL_RKE2_ARCH={{ global_master_arch | trim }}
         bash install.sh
       when: not rke2_installed.stat.exists
-    
+
     - name: 启用并启动rke2-server服务(请等待)
       systemd:
         name: rke2-server
@@ -938,12 +895,11 @@
       register: start_result
       retries: 30
       delay: 20
-      until: 
+      # >>> FIX 14: 加默认值兜底
+      until:
         - start_result is succeeded
-        - start_result.status.ActiveState is defined
-        - start_result.status.ActiveState == "active"
+        - (start_result.status | default({})).ActiveState | default('') == "active"
 
-    # ========== 修复 ExecStopPost：解决 restart 时 etcd 端口冲突 ==========
     - name: 修复 rke2-server ExecStopPost（解决 etcd 端口冲突问题）
       lineinfile:
         path: /usr/local/lib/systemd/system/rke2-server.service
@@ -959,8 +915,8 @@
 
     - name: 检查服务状态
       debug:
-        msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
-    
+        msg: "节点 {{ inventory_hostname }} 的rke2-server服务状态: {{ (start_result.status | default({})).ActiveState | default('unknown') }}"
+
     - name: 配置环境变量
       block:
         - name: 创建rke2.sh环境变量文件
@@ -971,7 +927,6 @@
               export KUBECONFIG={{ rke2_config_dir }}/rke2.yaml
             mode: 0644
 
-        # 复制kubectl到/usr/bin
         - name: 复制kubectl
           copy:
             src: "{{ rke2_data_dir }}/bin/kubectl"
@@ -979,14 +934,12 @@
             remote_src: yes
             owner: root
             group: root
-        
+
         - name: 给kubectl添加执行权限
-          shell: |
-            chmod +x /usr/bin/kubectl
+          shell: chmod +x /usr/bin/kubectl
           args:
             executable: /bin/bash
-        
-        # 创建.kube目录（如果不存在）
+
         - name: 创建.kube目录
           file:
             path: /root/.kube
@@ -994,8 +947,7 @@
             mode: 0700
             owner: root
             group: root
-        
-        # 复制kubeconfig
+
         - name: 复制kubeconfig
           copy:
             src: "{{ rke2_config_dir }}/rke2.yaml"
@@ -1005,17 +957,17 @@
             owner: root
             group: root
 
-        - name: 配置ctr命令和crictl
+        - name: 配置ctr命令
           lineinfile:
             path: /etc/profile
             line: 'alias ctr="{{ rke2_data_dir }}/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io"'
-        
+
         - name: 配置CRI_CONFIG_FILE
           lineinfile:
             path: /etc/profile
             line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
 
-        - name: 清理可能存在的旧文件（避免软链创建失败）
+        - name: 清理可能存在的旧文件
           file:
             path: /run/containerd/containerd.sock
             state: absent
@@ -1036,10 +988,11 @@
         - name: 显示软链接状态
           debug:
             msg: "{{ symlink_check.stdout_lines }}"
-    
+
     - name: 显示其他master节点安装完成信息
       debug:
         msg: "其他master节点 {{ inventory_hostname }} 安装完成!"
+
 
 # ==================== 步骤7: 启动worker节点 ====================
 - name: 步骤7 - 启动worker节点
@@ -1049,13 +1002,14 @@
     rke2_data_dir: "{{ global_data_dir }}"
     rke2_artifacts_dir: "{{ base_data_dir }}/rke2-artifacts"
     first_master: "{{ global_local_address }}"
-  
+
   tasks:
+    # >>> FIX 15: 用 /usr/local/bin/rke2 判断
     - name: 检查RKE2是否已安装
       stat:
-        path: "{{ rke2_data_dir }}/bin/rke2"
+        path: /usr/local/bin/rke2
       register: rke2_installed
-    
+
     - name: 安装worker节点
       shell: |
         cd {{ rke2_artifacts_dir }}
@@ -1064,7 +1018,7 @@
         export INSTALL_RKE2_ARCH={{ global_worker_arch | trim }}
         bash install.sh
       when: not rke2_installed.stat.exists
-    
+
     - name: 启用并启动rke2-agent服务(请等待)
       systemd:
         name: rke2-agent
@@ -1074,15 +1028,15 @@
       register: start_result
       retries: 30
       delay: 20
-      until: 
+      # >>> FIX 14: 加默认值兜底
+      until:
         - start_result is succeeded
-        - start_result.status.ActiveState is defined
-        - start_result.status.ActiveState == "active"
-    
+        - (start_result.status | default({})).ActiveState | default('') == "active"
+
     - name: 检查服务状态
       debug:
-        msg: "节点 {{ inventory_hostname }} 的rke2-agent服务状态: {{ start_result.status.ActiveState | default('unknown') }}"
-    
+        msg: "节点 {{ inventory_hostname }} 的rke2-agent服务状态: {{ (start_result.status | default({})).ActiveState | default('unknown') }}"
+
     - name: 配置环境变量
       block:
         - name: 创建rke2.sh环境变量文件
@@ -1091,18 +1045,18 @@
             content: |
               export PATH=$PATH:{{ rke2_data_dir }}/bin
             mode: 0644
-        
-        - name: 配置ctr命令和crictl
+
+        - name: 配置ctr命令
           lineinfile:
             path: /etc/profile
             line: 'alias ctr="{{ rke2_data_dir }}/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io"'
-        
+
         - name: 配置CRI_CONFIG_FILE
           lineinfile:
             path: /etc/profile
             line: 'export CRI_CONFIG_FILE={{ rke2_data_dir }}/agent/etc/crictl.yaml'
 
-        - name: 清理可能存在的旧文件（避免软链创建失败）
+        - name: 清理可能存在的旧文件
           file:
             path: /run/containerd/containerd.sock
             state: absent
@@ -1123,7 +1077,7 @@
         - name: 显示软链接状态
           debug:
             msg: "{{ symlink_check.stdout_lines }}"
-    
+
     - name: 显示worker节点安装完成信息
       debug:
         msg: "Worker节点 {{ inventory_hostname }} 安装完成!"
