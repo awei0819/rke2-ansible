@@ -12,9 +12,9 @@ master:
   - 192.168.80.32:8022
   - 192.168.80.33:8022
 
-# worker主机列表:ssh端口，有worker节点需取消注释
-#worker:
-#  - 192.168.80.34:8022
+# worker主机列表:ssh端口,无worker节点，添加#注释即可
+worker:
+  - 192.168.80.3:8022
 
 # 全局数据目录,结尾必须为rke2
 data_dir: /data/rke2
@@ -22,7 +22,7 @@ data_dir: /data/rke2
 # cni calico[暂只支持calico]
 cni: calico
 
-# 有不同网卡可适配多个，逗号分隔，只适用calico
+# 有不同网卡可适配多个，逗号分隔，只适用calico，如果网卡匹配有问题可尝试修改为ens.*
 calico_net: ens*
 
 # ingress部署开关
