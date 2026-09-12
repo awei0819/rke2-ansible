@@ -91,15 +91,26 @@ ansible_port=22
 ansible_ssh_pass=your_password
 
 # 如果端口和密码不一致
-[ssh-copy]
-# 格式：主机IP ansible_port=端口号 ansible_ssh_pass=密码
-192.168.80.31 ansible_port=22 ansible_ssh_pass=password_31
+[rke2]
+# 格式：主机IP ansible_port=端口号 ansible_ssh_pass='密码'
+192.168.80.31 ansible_port=8022 ansible_ssh_pass='password_31'
+
+# 配置跳过连接时的yes
+cat >> /etc/ansible/ansible.cfg << EOF
+[defaults]
+host_key_checking = False
+EOF
 
 
 
-# 修改init.sh
+
+# 连接测试
+ansible rke2 -m ping
+
+# 需提前创建好 ssh-keygen -t rsa
+# 修改init.sh、替换为rke2控制节点的公钥
 SSH_KEY=$(cat /root/.ssh/id_rsa.pub)
-sed -i "s|^SSH_KEY=\"\"|SSH_KEY=\"$SSH_KEY\"|" init.sh
+sed -i "s|^SSH_KEY=.*|SSH_KEY=\"$SSH_KEY\"|" init.sh
 
 # 分发节点初始化脚本
 ansible rke2 -m copy -a "src=./init.sh dest=/root/init.sh"
