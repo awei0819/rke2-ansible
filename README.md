@@ -107,7 +107,9 @@ EOF
 # 连接测试
 ansible rke2 -m ping
 
-# 需提前创建好 ssh-keygen -t rsa
+# 查看公钥内容,若没有，使用 ssh-keygen -t rsa 创建，执行后一直回车即可
+cat /root/.ssh/id_rsa.pub
+
 # 修改init.sh、替换为rke2控制节点的公钥
 SSH_KEY=$(cat /root/.ssh/id_rsa.pub)
 sed -i "s|^SSH_KEY=.*|SSH_KEY=\"$SSH_KEY\"|" init.sh
@@ -123,6 +125,8 @@ ansible rke2 -m shell -a "bash /root/init.sh"
 
 ```
 #------------- 容器内操作 ------------
+# 进入容器
+docker exec -it install-rke2-ansible bash
 # 配置 cluster.yaml 文件中有填写说明
 cd /data/install-rke2-ansible
 vi cluster.yaml
